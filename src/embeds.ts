@@ -35,6 +35,33 @@ const tiktokId = (url: URL): string | null => {
   return m ? m[1] : null;
 };
 
+// Twitter / X. Both hostnames resolve to the same tweet ID, so we accept either
+// and emit the platform.twitter.com embed (the iframe Twitter has shipped for
+// years and that doesn't need their widget script).
+const tweetId = (url: URL): string | null => {
+  const h = url.hostname.replace(/^mobile\./, "");
+  if (h !== "twitter.com" && h !== "x.com" && h !== "www.x.com" && h !== "www.twitter.com")
+    return null;
+  const m = url.pathname.match(/\/status\/(\d+)/);
+  return m ? m[1] : null;
+};
+
+// Vimeo: vimeo.com/{id} or vimeo.com/{user}/{id}
+const vimeoId = (url: URL): string | null => {
+  if (!url.hostname.endsWith("vimeo.com")) return null;
+  const m = url.pathname.match(/\/(\d+)(?:\/|$)/);
+  return m ? m[1] : null;
+};
+
+// Spotify: open.spotify.com/{type}/{id} where type is track/episode/album/playlist
+const spotifyPath = (url: URL): string | null => {
+  if (!url.hostname.endsWith("spotify.com")) return null;
+  const m = url.pathname.match(
+    /^\/(track|episode|album|playlist|artist|show)\/([\w-]+)/,
+  );
+  return m ? `${m[1]}/${m[2]}` : null;
+};
+
 export const detectEmbed = (input: string): EmbedInfo | null => {
   let url: URL;
   try {
@@ -70,6 +97,40 @@ export const detectEmbed = (input: string): EmbedInfo | null => {
       provider: "tiktok",
       embedUrl: `https://www.tiktok.com/embed/v2/${tt}`,
       defaultSize: { w: 340, h: 600 + FOOTER },
+    };
+  }
+
+  const tw = tweetId(url);
+  if (tw) {
+    // The dnt=true & theme query params make the embed cleaner; the embed page
+    // itself handles theming separately from those.
+    return {
+      provider: "twitter",
+      embedUrl: `https://platform.twitter.com/embed/Tweet.html?id=${tw}&dnt=true`,
+      defaultSize: { w: 480, h: 600 + FOOTER },
+    };
+  }
+
+  const vid = vimeoId(url);
+  if (vid) {
+    return {
+      provider: "vimeo",
+      embedUrl: `https://player.vimeo.com/video/${vid}`,
+      defaultSize: { w: 560, h: 315 + FOOTER },
+    };
+  }
+
+  const sp = spotifyPath(url);
+  if (sp) {
+    return {
+      provider: "spotify",
+      embedUrl: `https://open.spotify.com/embed/${sp}`,
+      // Tracks/episodes are short, playlists/albums are tall. Use a flexible default.
+      defaultSize: {
+        w: 360,
+        h: (sp.startsWith("track/") || sp.startsWith("episode/") ? 152 : 380) +
+          FOOTER,
+      },
     };
   }
 

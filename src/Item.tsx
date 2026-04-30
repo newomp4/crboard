@@ -25,6 +25,9 @@ type Props = {
 };
 
 const HANDLE_SIZE = 10;
+// Minimum height for text items. Keeps short stickies large enough to grab
+// reliably with a mouse — 48px works out to roughly two lines + padding.
+const MIN_TEXT_H = 48;
 
 export const ItemView = ({
   item,
@@ -372,13 +375,23 @@ const TextBody = ({
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Auto-grow: every time the text or width changes, recompute height to fit.
-  // We measure on the textarea itself by setting height:auto and reading
-  // scrollHeight, then update the item if it's drifted.
+  // We measure the textarea by setting height:auto and reading scrollHeight,
+  // then update the item to match.
+  //
+  // Important detail: with box-sizing:border-box, scrollHeight reports
+  // content + padding but EXCLUDES the border. The wrapper sets the textarea
+  // height (via height:100%) including the border, so we have to add it back —
+  // otherwise the last line gets clipped. We read the actual border width from
+  // computed styles so this stays correct if the border ever changes.
   useLayoutEffect(() => {
     const ta = ref.current;
     if (!ta) return;
     ta.style.height = "auto";
-    const measured = Math.max(40, ta.scrollHeight);
+    const cs = window.getComputedStyle(ta);
+    const borderY =
+      (parseFloat(cs.borderTopWidth) || 0) +
+      (parseFloat(cs.borderBottomWidth) || 0);
+    const measured = Math.max(MIN_TEXT_H, Math.ceil(ta.scrollHeight + borderY));
     if (Math.abs(measured - item.h) > 0.5) {
       dispatch({
         type: "updateItem",
@@ -403,6 +416,9 @@ const TextBody = ({
       ref={ref}
       value={item.text}
       readOnly={!editing}
+      // Keep the textarea out of the keyboard tab order while not editing —
+      // otherwise pressing Tab can quietly focus it and "hijack" Backspace.
+      tabIndex={editing ? 0 : -1}
       placeholder={editing ? "Type…" : ""}
       spellCheck={editing}
       onChange={(e) =>

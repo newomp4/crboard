@@ -130,6 +130,19 @@ const VIEWER_JS = `
     if(u.hostname.indexOf('tiktok.com')>=0){
       var tm=u.pathname.match(/\\/video\\/(\\d+)/); if(tm) return 'https://www.tiktok.com/embed/v2/'+tm[1];
     }
+    var th=u.hostname.replace(/^mobile\\./,'');
+    if(th==='twitter.com'||th==='www.twitter.com'||th==='x.com'||th==='www.x.com'){
+      var twm=u.pathname.match(/\\/status\\/(\\d+)/);
+      if(twm) return 'https://platform.twitter.com/embed/Tweet.html?id='+twm[1]+'&dnt=true';
+    }
+    if(u.hostname.indexOf('vimeo.com')>=0){
+      var vm=u.pathname.match(/\\/(\\d+)(?:\\/|$)/);
+      if(vm) return 'https://player.vimeo.com/video/'+vm[1];
+    }
+    if(u.hostname.indexOf('spotify.com')>=0){
+      var sm=u.pathname.match(/^\\/(track|episode|album|playlist|artist|show)\\/([\\w-]+)/);
+      if(sm) return 'https://open.spotify.com/embed/'+sm[1]+'/'+sm[2];
+    }
     return input;
   }
 

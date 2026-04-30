@@ -40,7 +40,14 @@ export type ImageItem = Base & {
 export type EmbedItem = Base & {
   type: "embed";
   url: string;
-  provider: "youtube" | "instagram" | "tiktok" | "generic";
+  provider:
+    | "youtube"
+    | "instagram"
+    | "tiktok"
+    | "twitter"
+    | "vimeo"
+    | "spotify"
+    | "generic";
 };
 
 export type LinkItem = Base & {

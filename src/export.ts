@@ -204,11 +204,55 @@ const VIEWER_JS = `
         svg.appendChild(p);
       });
       el.appendChild(svg);
+    } else if(it.type==='connector'){
+      // Connectors are rendered separately in an SVG layer above the world.
+      return null;
     }
     return el;
   }
 
-  (board.items||[]).forEach(function(it){ world.appendChild(renderItem(it)); });
+  (board.items||[]).forEach(function(it){
+    var el=renderItem(it); if(el) world.appendChild(el);
+  });
+
+  // ----- connector layer -----
+  // Compute world-coord lines clipped at each item's bbox edge, render as SVG
+  // inside the world transform so they pan/zoom with everything else.
+  var ns2='http://www.w3.org/2000/svg';
+  var connectorSvg=document.createElementNS(ns2,'svg');
+  connectorSvg.setAttribute('style','position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none');
+  // Marker definition (arrowhead). Sized in user-space units; with
+  // vector-effect:non-scaling-stroke on the line, the visible arrow stays
+  // roughly constant in screen pixels because the rendered stroke is fixed.
+  var defs=document.createElementNS(ns2,'defs');
+  defs.innerHTML='<marker id="cr-arrow" markerUnits="strokeWidth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M 0 0 L 6 3 L 0 6 Z" fill="currentColor"/></marker>';
+  connectorSvg.appendChild(defs);
+  var byId={};
+  (board.items||[]).forEach(function(it){ byId[it.id]=it; });
+  function rayBoxExit(start,dir,box){
+    var tx=dir.x>0?(box.x+box.w-start.x)/dir.x:dir.x<0?(box.x-start.x)/dir.x:Infinity;
+    var ty=dir.y>0?(box.y+box.h-start.y)/dir.y:dir.y<0?(box.y-start.y)/dir.y:Infinity;
+    var t=Math.max(0,Math.min(tx,ty));
+    return {x:start.x+dir.x*t,y:start.y+dir.y*t};
+  }
+  (board.items||[]).forEach(function(it){
+    if(it.type!=='connector') return;
+    var a=byId[it.from], b=byId[it.to];
+    if(!a||!b) return;
+    var fc={x:a.x+a.w/2,y:a.y+a.h/2}, tc={x:b.x+b.w/2,y:b.y+b.h/2};
+    var e1=rayBoxExit(fc,{x:tc.x-fc.x,y:tc.y-fc.y},a);
+    var e2=rayBoxExit(tc,{x:fc.x-tc.x,y:fc.y-tc.y},b);
+    var line=document.createElementNS(ns2,'line');
+    line.setAttribute('x1',e1.x); line.setAttribute('y1',e1.y);
+    line.setAttribute('x2',e2.x); line.setAttribute('y2',e2.y);
+    line.setAttribute('stroke','currentColor');
+    line.setAttribute('stroke-width','1.75');
+    line.setAttribute('vector-effect','non-scaling-stroke');
+    line.setAttribute('marker-end','url(#cr-arrow)');
+    line.setAttribute('style','color:var(--text-2)');
+    connectorSvg.appendChild(line);
+  });
+  world.appendChild(connectorSvg);
 
   function applyView(){
     world.style.transform='translate('+view.x+'px,'+view.y+'px) scale('+view.zoom+')';

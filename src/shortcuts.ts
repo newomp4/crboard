@@ -22,6 +22,8 @@ export const useToolShortcuts = (dispatch: React.Dispatch<Action>) => {
         dispatch({ type: "setTool", tool: "text" });
       if (e.key === "p" || e.key === "P")
         dispatch({ type: "setTool", tool: "pen" });
+      if (e.key === "c" || e.key === "C")
+        dispatch({ type: "setTool", tool: "connector" });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

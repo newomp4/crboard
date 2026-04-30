@@ -4,9 +4,9 @@
 // the active state is just an inverted color block.
 
 import { useEffect, useRef, useState } from "react";
-import type { Action, State } from "./store";
+import type { Action, SaveStatus, State } from "./store";
 import type { ItemDraft } from "./types";
-import { detectEmbed, looksLikeImageUrl } from "./embeds";
+import { itemFromUrl } from "./embeds";
 import { fileToDataUrl, openBoardFile, saveBoardFile } from "./io";
 import { downloadHtml } from "./export";
 import { clampZoom, fitToBounds, zoomCenter } from "./coords";
@@ -14,9 +14,10 @@ import { clampZoom, fitToBounds, zoomCenter } from "./coords";
 type Props = {
   state: State;
   dispatch: React.Dispatch<Action>;
+  saveStatus: SaveStatus;
 };
 
-export const Toolbar = ({ state, dispatch }: Props) => {
+export const Toolbar = ({ state, dispatch, saveStatus }: Props) => {
   const { board, tool } = state;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,58 +78,10 @@ export const Toolbar = ({ state, dispatch }: Props) => {
 
   const addEmbedOrLink = () => {
     const url = window.prompt(
-      "Paste a URL (YouTube, Instagram, TikTok, image, or any link):",
+      "Paste a URL (YouTube, Instagram, TikTok, X, Vimeo, Spotify, image, or any link):",
     );
     if (!url) return;
-    const trimmed = url.trim();
-    const center = screenCenter();
-
-    if (looksLikeImageUrl(trimmed)) {
-      dispatch({
-        type: "addItem",
-        item: {
-          type: "image",
-          src: trimmed,
-          x: center.x - 200,
-          y: center.y - 150,
-          w: 400,
-          h: 300,
-        },
-      });
-      return;
-    }
-
-    const info = detectEmbed(trimmed);
-    if (info && info.provider !== "generic") {
-      const { w, h } = info.defaultSize;
-      dispatch({
-        type: "addItem",
-        item: {
-          type: "embed",
-          url: trimmed,
-          provider: info.provider,
-          x: center.x - w / 2,
-          y: center.y - h / 2,
-          w,
-          h,
-        },
-      });
-      return;
-    }
-
-    // Fallback: link card.
-    dispatch({
-      type: "addItem",
-      item: {
-        type: "link",
-        url: trimmed,
-        title: "",
-        x: center.x - 160,
-        y: center.y - 50,
-        w: 320,
-        h: 100,
-      },
-    });
+    dispatch({ type: "addItem", item: itemFromUrl(url.trim(), screenCenter()) });
   };
 
   return (
@@ -170,6 +123,8 @@ export const Toolbar = ({ state, dispatch }: Props) => {
           }}
         />
         <div style={{ flex: 1 }} />
+
+        <SaveIndicator status={saveStatus} />
 
         <HelpButton />
 
@@ -284,6 +239,14 @@ export const Toolbar = ({ state, dispatch }: Props) => {
           shortcut="P"
         >
           <PenIcon />
+        </ToolButton>
+        <ToolButton
+          active={tool === "connector"}
+          onClick={() => dispatch({ type: "setTool", tool: "connector" })}
+          label="Connector"
+          shortcut="C"
+        >
+          <ConnectorIcon />
         </ToolButton>
         <Divider />
         <ToolButton onClick={addImage} label="Add image">
@@ -508,6 +471,53 @@ const TextOptions = ({
   );
 };
 
+// Tiny "Saving…" / "Saved" indicator. Stays mounted so the layout doesn't
+// jump; opacity transitions in/out on activity.
+const SaveIndicator = ({ status }: { status: SaveStatus }) => {
+  // Show while saving, and for ~1.5s after a successful save.
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (status.pending) {
+      setVisible(true);
+      return;
+    }
+    if (status.savedAt) {
+      setVisible(true);
+      const t = setTimeout(() => setVisible(false), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [status.pending, status.savedAt]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11,
+        color: "var(--text-3)",
+        minWidth: 64,
+        justifyContent: "flex-end",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 200ms ease",
+        fontVariantNumeric: "tabular-nums",
+        pointerEvents: "none",
+      }}
+      aria-live="polite"
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: status.pending ? "var(--text-faint)" : "var(--text-2)",
+        }}
+      />
+      {status.pending ? "Saving…" : "Saved"}
+    </div>
+  );
+};
+
 const ThemeToggle = ({
   theme,
   dispatch,
@@ -722,7 +732,7 @@ const HelpOverlay = ({ onClose }: { onClose: () => void }) => {
   const mod = isMac ? "⌘" : "Ctrl+";
 
   const rows: [string, string][] = [
-    ["V / T / P", "Select / Text / Pen"],
+    ["V / T / P / C", "Select / Text / Pen / Connector"],
     [`${mod}Z`, "Undo"],
     [`${isMac ? "⇧⌘Z" : "Ctrl+Shift+Z"}`, "Redo"],
     [`${mod}D`, "Duplicate"],
@@ -930,6 +940,13 @@ const TextIcon = () => (
 const PenIcon = () => (
   <Stroke>
     <path d="M14 4l6 6-11 11H3v-6z" />
+  </Stroke>
+);
+const ConnectorIcon = () => (
+  <Stroke>
+    <circle cx="5" cy="19" r="2" />
+    <path d="M6.5 17.5L18 6" />
+    <path d="M14 6h5v5" />
   </Stroke>
 );
 const ImageIcon = () => (

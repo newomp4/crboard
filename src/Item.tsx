@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { Item, View } from "./types";
 import type { Action } from "./store";
 import { detectEmbed } from "./embeds";
+import { computeSnap, type Guide } from "./snap";
 
 type Props = {
   item: Item;
@@ -17,13 +18,15 @@ type Props = {
   suppressIndividualHandles?: boolean;
   autoEdit?: boolean;
   view: View;
-  tool: "select" | "text" | "pen";
+  tool: "select" | "text" | "pen" | "connector";
   // Needed for multi-drag: the drag handler captures origin positions of
   // every selected item at gesture start so they all move together.
   allItems: Item[];
   selectedIds: string[];
   // Right-click handler. Canvas opens a small action menu at (clientX, clientY).
   onContextMenu?: (itemId: string, clientX: number, clientY: number) => void;
+  // Reports active alignment guides during a drag so Canvas can render them.
+  onSnapGuides?: (guides: { x: Guide | null; y: Guide | null } | null) => void;
   dispatch: React.Dispatch<Action>;
 };
 
@@ -42,6 +45,7 @@ export const ItemView = ({
   allItems,
   selectedIds,
   onContextMenu,
+  onSnapGuides,
   dispatch,
 }: Props) => {
   const ref = useRef<HTMLDivElement>(null);
@@ -107,26 +111,70 @@ export const ItemView = ({
       }
       dispatch({ type: "bringToFront", id: item.id });
 
-      // Capture origin positions so each move event computes absolute
-      // positions from the gesture start (avoids accumulating rounding error).
-      const origins = new Map<string, { x: number; y: number }>();
+      // Capture origin positions for each dragged item AND the bbox of the
+      // group at gesture start. The bbox is used by the alignment-snap math.
+      const origins = new Map<string, { x: number; y: number; w: number; h: number }>();
+      let bbMinX = Infinity,
+        bbMinY = Infinity,
+        bbMaxX = -Infinity,
+        bbMaxY = -Infinity;
       for (const id of dragIds) {
         const it = allItems.find((i) => i.id === id);
-        if (it) origins.set(id, { x: it.x, y: it.y });
+        if (it) {
+          origins.set(id, { x: it.x, y: it.y, w: it.w, h: it.h });
+          if (it.x < bbMinX) bbMinX = it.x;
+          if (it.y < bbMinY) bbMinY = it.y;
+          if (it.x + it.w > bbMaxX) bbMaxX = it.x + it.w;
+          if (it.y + it.h > bbMaxY) bbMaxY = it.y + it.h;
+        }
       }
+      const dragBbox = {
+        x: bbMinX,
+        y: bbMinY,
+        w: bbMaxX - bbMinX,
+        h: bbMaxY - bbMinY,
+      };
+
+      // Other-item bboxes for snap targets — exclude the items being dragged,
+      // exclude connectors (their bbox is just the line bbox; not useful as a
+      // snap target), and zero-size items.
+      const dragSet = new Set(dragIds);
+      const others = allItems
+        .filter(
+          (it) =>
+            !dragSet.has(it.id) &&
+            it.type !== "connector" &&
+            it.w > 1 &&
+            it.h > 1,
+        )
+        .map((it) => ({ x: it.x, y: it.y, w: it.w, h: it.h }));
+
+      // 6 screen pixels worth of slack, converted to world units.
+      const snapThreshold = 6 / view.zoom;
 
       let committed = false;
       const startX = e.clientX;
       const startY = e.clientY;
 
       const onMove = (ev: PointerEvent) => {
-        const dx = (ev.clientX - startX) / view.zoom;
-        const dy = (ev.clientY - startY) / view.zoom;
-        if (dx === 0 && dy === 0) return;
+        const rawDx = (ev.clientX - startX) / view.zoom;
+        const rawDy = (ev.clientY - startY) / view.zoom;
+        if (rawDx === 0 && rawDy === 0) return;
         if (!committed) {
           dispatch({ type: "commitHistory" });
           committed = true;
         }
+        // Run snap on the *would-be* new bbox.
+        const candidate = {
+          x: dragBbox.x + rawDx,
+          y: dragBbox.y + rawDy,
+          w: dragBbox.w,
+          h: dragBbox.h,
+        };
+        const snap = computeSnap(candidate, others, snapThreshold);
+        const dx = rawDx + snap.dx;
+        const dy = rawDy + snap.dy;
+        onSnapGuides?.({ x: snap.xGuide, y: snap.yGuide });
         const positions = dragIds.flatMap((id) => {
           const o = origins.get(id);
           return o ? [{ id, x: o.x + dx, y: o.y + dy }] : [];
@@ -136,11 +184,22 @@ export const ItemView = ({
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        onSnapGuides?.(null);
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    [tool, editing, selected, item, selectedIds, allItems, view.zoom, dispatch],
+    [
+      tool,
+      editing,
+      selected,
+      item,
+      selectedIds,
+      allItems,
+      view.zoom,
+      onSnapGuides,
+      dispatch,
+    ],
   );
 
   const startResize = useCallback(
@@ -391,6 +450,9 @@ const ItemBody = ({
       return <LinkBody item={item} selected={selected} />;
     case "drawing":
       return <DrawingBody item={item} />;
+    case "connector":
+      // Connectors render in a dedicated SVG layer, not inside an item wrapper.
+      return null;
   }
 };
 

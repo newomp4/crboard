@@ -6,7 +6,7 @@
 // Tools that *change canvas behavior* on mousedown.
 // Adding images/embeds is a one-shot action triggered from the toolbar
 // (file picker / URL prompt), not a persistent canvas mode.
-export type Tool = "select" | "text" | "pen";
+export type Tool = "select" | "text" | "pen" | "connector";
 
 export type Theme = "light" | "dark";
 
@@ -68,7 +68,24 @@ export type DrawingItem = Base & {
   strokes: Stroke[];
 };
 
-export type Item = TextItem | ImageItem | EmbedItem | LinkItem | DrawingItem;
+// Connector ("arrow") between two items. The visible line is drawn each
+// render from the endpoints' centers, clipped at each item's bbox so the
+// arrow emerges from the item edge rather than its centre. The base x/y/w/h
+// stores the bbox of the line (recomputed when endpoints move) so connectors
+// participate in selection-by-rubber-band and storage like any other item.
+export type ConnectorItem = Base & {
+  type: "connector";
+  from: string; // item id
+  to: string; // item id
+};
+
+export type Item =
+  | TextItem
+  | ImageItem
+  | EmbedItem
+  | LinkItem
+  | DrawingItem
+  | ConnectorItem;
 
 export type Board = {
   version: 1;

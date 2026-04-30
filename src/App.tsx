@@ -7,7 +7,7 @@ import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
 import { useStore } from "./store";
-import { detectEmbed, looksLikeImageUrl, looksLikeUrl } from "./embeds";
+import { extractUrlFromClipboard, itemFromUrl } from "./embeds";
 import { fileToDataUrl } from "./io";
 import type { Item, ItemDraft } from "./types";
 
@@ -17,7 +17,7 @@ import type { Item, ItemDraft } from "./types";
 const CR_CLIPBOARD_TAG = "crboard/v1";
 
 const App = () => {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, saveStatus } = useStore();
   useToolShortcuts(dispatch);
 
   // Compute world coordinates near the visible center for new items.
@@ -162,58 +162,19 @@ const App = () => {
         }
       }
 
-      // 2. Text — could be a URL or just text.
-      const text = cd.getData("text/plain");
-      if (!text) return;
-
-      if (looksLikeUrl(text)) {
+      // 2. Any URL we can find in the clipboard — text/uri-list, text/plain
+      //    (whole or extracted substring), or text/html href.
+      const url = extractUrlFromClipboard(cd);
+      if (url) {
         e.preventDefault();
         const c = worldCenter();
-        if (looksLikeImageUrl(text)) {
-          dispatch({
-            type: "addItem",
-            item: {
-              type: "image",
-              src: text,
-              x: c.x - 200,
-              y: c.y - 150,
-              w: 400,
-              h: 300,
-            },
-          });
-          return;
-        }
-        const info = detectEmbed(text);
-        if (info && info.provider !== "generic") {
-          dispatch({
-            type: "addItem",
-            item: {
-              type: "embed",
-              url: text,
-              provider: info.provider,
-              x: c.x - info.defaultSize.w / 2,
-              y: c.y - info.defaultSize.h / 2,
-              w: info.defaultSize.w,
-              h: info.defaultSize.h,
-            },
-          });
-          return;
-        }
-        dispatch({
-          type: "addItem",
-          item: {
-            type: "link",
-            url: text,
-            x: c.x - 160,
-            y: c.y - 50,
-            w: 320,
-            h: 100,
-          },
-        });
+        dispatch({ type: "addItem", item: itemFromUrl(url, c) });
         return;
       }
 
       // 3. Plain text → text item.
+      const text = cd.getData("text/plain");
+      if (!text) return;
       e.preventDefault();
       const c = worldCenter();
       dispatch({
@@ -305,7 +266,7 @@ const App = () => {
   return (
     <div style={{ position: "fixed", inset: 0 }}>
       <Canvas state={state} dispatch={dispatch} />
-      <Toolbar state={state} dispatch={dispatch} />
+      <Toolbar state={state} dispatch={dispatch} saveStatus={saveStatus} />
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
         <div className="drop-overlay">

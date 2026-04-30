@@ -12,6 +12,7 @@ import type { Item, ItemDraft, Stroke } from "./types";
 import { ItemView } from "./Item";
 import { clampZoom, fitToBounds, screenToWorld, zoomAt } from "./coords";
 import { smoothPathD, thinPoints } from "./smooth";
+import type { Guide } from "./snap";
 
 type Props = {
   state: State;
@@ -32,6 +33,17 @@ export const Canvas = ({ state, dispatch }: Props) => {
     x: number;
     y: number;
     itemId: string;
+  } | null>(null);
+  // Connector tool drag-in-progress.
+  const [connectorDrag, setConnectorDrag] = useState<{
+    sourceId: string;
+    cursorScreen: { x: number; y: number };
+    hoverTargetId: string | null;
+  } | null>(null);
+  // Active alignment guides during a drag (set by Item.tsx via callback).
+  const [snapGuides, setSnapGuides] = useState<{
+    x: Guide | null;
+    y: Guide | null;
   } | null>(null);
 
   // In-progress drawing stroke. Stored separately from the board so we don't
@@ -267,6 +279,60 @@ export const Canvas = ({ state, dispatch }: Props) => {
 
     const world = screenToWorld(screen, board.view);
 
+    // Connector tool: pointerdown on an item starts a connector drag.
+    if (tool === "connector") {
+      const el = e.target as HTMLElement;
+      const sourceEl = el?.closest?.("[data-item-id]") as HTMLElement | null;
+      const sourceId = sourceEl?.getAttribute("data-item-id");
+      if (!sourceId) return; // empty-canvas click in connector mode = noop
+      e.preventDefault();
+      setConnectorDrag({
+        sourceId,
+        cursorScreen: { x: screen.x, y: screen.y },
+        hoverTargetId: null,
+      });
+      const onMove = (ev: PointerEvent) => {
+        const r = containerRef.current!.getBoundingClientRect();
+        const cs = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+        const overEl = document
+          .elementFromPoint(ev.clientX, ev.clientY)
+          ?.closest?.("[data-item-id]") as HTMLElement | null;
+        const overId = overEl?.getAttribute("data-item-id") ?? null;
+        setConnectorDrag({
+          sourceId,
+          cursorScreen: cs,
+          hoverTargetId: overId && overId !== sourceId ? overId : null,
+        });
+      };
+      const onUp = (ev: PointerEvent) => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const overEl = document
+          .elementFromPoint(ev.clientX, ev.clientY)
+          ?.closest?.("[data-item-id]") as HTMLElement | null;
+        const targetId = overEl?.getAttribute("data-item-id");
+        setConnectorDrag(null);
+        if (targetId && targetId !== sourceId) {
+          // Reducer will compute the real bbox via reconcileConnectors.
+          dispatch({
+            type: "addItem",
+            item: {
+              type: "connector",
+              from: sourceId,
+              to: targetId,
+              x: 0,
+              y: 0,
+              w: 0,
+              h: 0,
+            },
+          });
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      return;
+    }
+
     if (tool === "text") {
       dispatch({
         type: "addItem",
@@ -411,6 +477,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
   if (panning) cursor = "grabbing";
   else if (spaceDown) cursor = "grab";
   else if (tool === "pen") cursor = "crosshair";
+  else if (tool === "connector") cursor = "crosshair";
   else if (tool === "text") cursor = "text";
 
   return (
@@ -452,28 +519,33 @@ export const Canvas = ({ state, dispatch }: Props) => {
           height: 0,
         }}
       >
-        {board.items.map((it) => (
-          <ItemView
-            key={it.id}
-            item={it}
-            selected={selection.has(it.id)}
-            // Hide the per-item selection chrome while a multi-select is
-            // active — the group bounding box draws its own.
-            suppressIndividualHandles={selection.size > 1}
-            autoEdit={editId === it.id}
-            view={board.view}
-            tool={tool}
-            allItems={board.items}
-            selectedIds={selectedIds}
-            onContextMenu={(itemId, x, y) => setCtxMenu({ itemId, x, y })}
-            dispatch={dispatch}
-          />
-        ))}
+        {board.items
+          .filter((it) => it.type !== "connector")
+          .map((it) => (
+            <ItemView
+              key={it.id}
+              item={it}
+              selected={selection.has(it.id)}
+              // Hide the per-item selection chrome while a multi-select is
+              // active — the group bounding box draws its own.
+              suppressIndividualHandles={selection.size > 1}
+              autoEdit={editId === it.id}
+              view={board.view}
+              tool={tool}
+              allItems={board.items}
+              selectedIds={selectedIds}
+              onContextMenu={(itemId, x, y) => setCtxMenu({ itemId, x, y })}
+              onSnapGuides={setSnapGuides}
+              dispatch={dispatch}
+            />
+          ))}
 
         {/* Group bounding box + 8 handles when 2+ items are selected. */}
         {selection.size > 1 && (
           <MultiSelection
-            items={board.items.filter((it) => selection.has(it.id))}
+            items={board.items.filter(
+              (it) => selection.has(it.id) && it.type !== "connector",
+            )}
             view={board.view}
             dispatch={dispatch}
           />
@@ -501,7 +573,68 @@ export const Canvas = ({ state, dispatch }: Props) => {
             />
           </svg>
         )}
+
+        {/* Alignment guides (in world coords). non-scaling-stroke keeps
+            line width pixel-constant regardless of zoom. */}
+        {snapGuides && (snapGuides.x || snapGuides.y) && (
+          <svg
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              overflow: "visible",
+              pointerEvents: "none",
+            }}
+          >
+            {snapGuides.x && (
+              <line
+                x1={snapGuides.x.pos}
+                x2={snapGuides.x.pos}
+                y1={
+                  Math.min(...snapGuides.x.spans.map((b) => b.y)) - 50
+                }
+                y2={
+                  Math.max(...snapGuides.x.spans.map((b) => b.y + b.h)) + 50
+                }
+                stroke="var(--selection)"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+                strokeDasharray="4 3"
+              />
+            )}
+            {snapGuides.y && (
+              <line
+                y1={snapGuides.y.pos}
+                y2={snapGuides.y.pos}
+                x1={
+                  Math.min(...snapGuides.y.spans.map((b) => b.x)) - 50
+                }
+                x2={
+                  Math.max(...snapGuides.y.spans.map((b) => b.x + b.w)) + 50
+                }
+                stroke="var(--selection)"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+                strokeDasharray="4 3"
+              />
+            )}
+          </svg>
+        )}
       </div>
+
+      {/* Connector layer — SVG rendered in SCREEN coords above the world.
+          Drawing in screen coords keeps stroke widths and arrowhead sizes
+          constant regardless of zoom. */}
+      <ConnectorLayer
+        items={board.items}
+        selection={selection}
+        view={board.view}
+        connectorDrag={connectorDrag}
+        tool={tool}
+        dispatch={dispatch}
+      />
 
       {/* Rubber-band marquee — drawn in screen coords above the world. */}
       {marquee && (
@@ -530,6 +663,219 @@ export const Canvas = ({ state, dispatch }: Props) => {
       )}
     </div>
   );
+};
+
+// ---------- connectors ----------
+
+// Draws all connectors as SVG lines + arrowheads, plus the in-progress
+// preview line while the user is mid-connector-drag.
+//
+// We render in SCREEN coords (a viewport-sized SVG sitting above the world
+// transform) and project endpoints with the current view. Two reasons:
+//   - stroke width and arrowhead size stay constant regardless of zoom
+//   - hit testing is straightforward because positions are real pixels
+const ConnectorLayer = ({
+  items,
+  selection,
+  view,
+  connectorDrag,
+  tool,
+  dispatch,
+}: {
+  items: Item[];
+  selection: Set<string>;
+  view: { x: number; y: number; zoom: number };
+  connectorDrag: {
+    sourceId: string;
+    cursorScreen: { x: number; y: number };
+    hoverTargetId: string | null;
+  } | null;
+  tool: string;
+  dispatch: React.Dispatch<Action>;
+}) => {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const connectors = items.filter(
+    (it): it is Extract<Item, { type: "connector" }> =>
+      it.type === "connector",
+  );
+
+  // Project a world point to screen pixels.
+  const proj = (wx: number, wy: number) => ({
+    x: wx * view.zoom + view.x,
+    y: wy * view.zoom + view.y,
+  });
+
+  // Endpoints clipped at each item's bbox edge.
+  const clippedScreen = (
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ) => {
+    const fc = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+    const tc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    const exit = rayBoxExit(fc, { x: tc.x - fc.x, y: tc.y - fc.y }, a);
+    const entry = rayBoxExit(tc, { x: fc.x - tc.x, y: fc.y - tc.y }, b);
+    const e1 = proj(exit.x, exit.y);
+    const e2 = proj(entry.x, entry.y);
+    return { x1: e1.x, y1: e1.y, x2: e2.x, y2: e2.y };
+  };
+
+  // Source center for the in-progress preview.
+  const previewLine = (() => {
+    if (!connectorDrag) return null;
+    const src = byId.get(connectorDrag.sourceId);
+    if (!src) return null;
+    const sc = proj(src.x + src.w / 2, src.y + src.h / 2);
+    return {
+      x1: sc.x,
+      y1: sc.y,
+      x2: connectorDrag.cursorScreen.x,
+      y2: connectorDrag.cursorScreen.y,
+    };
+  })();
+
+  return (
+    <svg
+      style={{
+        position: "absolute",
+        inset: 0,
+        // Lines themselves accept clicks (for selection) but the SVG element
+        // shouldn't block clicks where there's no line.
+        pointerEvents: "none",
+        overflow: "visible",
+      }}
+    >
+      <defs>
+        <marker
+          id="cr-arrow"
+          markerUnits="userSpaceOnUse"
+          markerWidth="14"
+          markerHeight="14"
+          refX="12"
+          refY="7"
+          orient="auto"
+        >
+          <path d="M 0 1 L 12 7 L 0 13 Z" fill="currentColor" />
+        </marker>
+        <marker
+          id="cr-arrow-active"
+          markerUnits="userSpaceOnUse"
+          markerWidth="14"
+          markerHeight="14"
+          refX="12"
+          refY="7"
+          orient="auto"
+        >
+          <path d="M 0 1 L 12 7 L 0 13 Z" fill="var(--selection)" />
+        </marker>
+      </defs>
+
+      {/* Hover-target highlight while drawing a connector. */}
+      {connectorDrag?.hoverTargetId &&
+        (() => {
+          const t = byId.get(connectorDrag.hoverTargetId);
+          if (!t) return null;
+          const tl = proj(t.x, t.y);
+          return (
+            <rect
+              x={tl.x - 2}
+              y={tl.y - 2}
+              width={t.w * view.zoom + 4}
+              height={t.h * view.zoom + 4}
+              fill="none"
+              stroke="var(--selection)"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+            />
+          );
+        })()}
+
+      {connectors.map((c) => {
+        const a = byId.get(c.from);
+        const b = byId.get(c.to);
+        if (!a || !b) return null;
+        const { x1, y1, x2, y2 } = clippedScreen(a, b);
+        const isSelected = selection.has(c.id);
+        return (
+          <g
+            key={c.id}
+            style={{ color: isSelected ? "var(--selection)" : "var(--text-2)" }}
+          >
+            {/* Wide invisible "hit" line for easier clicking — only active in select mode. */}
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke="transparent"
+              strokeWidth={14}
+              style={{
+                pointerEvents: tool === "select" ? "stroke" : "none",
+                cursor: "pointer",
+              }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                dispatch(
+                  e.shiftKey
+                    ? { type: "selectToggle", id: c.id }
+                    : { type: "selectOnly", ids: [c.id] },
+                );
+              }}
+            />
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke="currentColor"
+              strokeWidth={isSelected ? 2.5 : 1.75}
+              markerEnd={
+                isSelected ? "url(#cr-arrow-active)" : "url(#cr-arrow)"
+              }
+              style={{ pointerEvents: "none" }}
+            />
+          </g>
+        );
+      })}
+
+      {/* In-progress preview line (dashed). */}
+      {previewLine && (
+        <line
+          x1={previewLine.x1}
+          y1={previewLine.y1}
+          x2={previewLine.x2}
+          y2={previewLine.y2}
+          stroke="var(--text-2)"
+          strokeWidth={1.5}
+          strokeDasharray="6 4"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
+    </svg>
+  );
+};
+
+// Cast a ray from a point inside an axis-aligned bbox toward a direction;
+// return the point at which the ray exits the bbox. Used to clip a connector
+// line so its tip emerges from the item's edge instead of its centre.
+const rayBoxExit = (
+  start: { x: number; y: number },
+  dir: { x: number; y: number },
+  box: { x: number; y: number; w: number; h: number },
+) => {
+  const tx =
+    dir.x > 0
+      ? (box.x + box.w - start.x) / dir.x
+      : dir.x < 0
+        ? (box.x - start.x) / dir.x
+        : Infinity;
+  const ty =
+    dir.y > 0
+      ? (box.y + box.h - start.y) / dir.y
+      : dir.y < 0
+        ? (box.y - start.y) / dir.y
+        : Infinity;
+  const t = Math.max(0, Math.min(tx, ty));
+  return { x: start.x + dir.x * t, y: start.y + dir.y * t };
 };
 
 // ---------- group transform ----------

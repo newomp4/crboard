@@ -22,7 +22,8 @@ Then open the printed URL (usually http://localhost:5173).
 - **Zoom**: ⌘/ctrl + scroll, or pinch on a trackpad.
 - **Add text**: pick the text tool (T), click anywhere, type. Double-click to edit again.
 - **Add image**: click the image button — or paste an image from your clipboard, or drag an image file onto the canvas.
-- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
+- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok / X / Vimeo / Spotify auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
+- **Connect items with arrows**: pick the connector tool (`C`), drag from one item to another.
 - **Draw**: pick the pen tool (P), drag.
 - **Move / resize**: select an item with V (or just click), drag to move, drag corners to resize.
 - **Click an embed once to select it** (the iframe is dim-locked while unselected so the wrapper can capture the click); click again — or click anywhere inside it after selection — to interact with the embedded page.
@@ -35,7 +36,7 @@ Then open the printed URL (usually http://localhost:5173).
 
 | | |
 |---|---|
-| `V` / `T` / `P` | Select / Text / Pen |
+| `V` / `T` / `P` / `C` | Select / Text / Pen / Connector |
 | `⌘Z` | Undo |
 | `⇧⌘Z` or `⌘Y` | Redo |
 | `⌘D` | Duplicate selection |

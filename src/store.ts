@@ -9,7 +9,7 @@
 //     at the start of the gesture to snapshot the pre-drag state.
 //   - `setView`, selection, and `setTool` never affect history.
 
-import { useEffect, useMemo, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { nanoid } from "nanoid";
 import type { Board, Item, ItemDraft, Theme, Tool, View } from "./types";
 import { emptyBoard } from "./types";
@@ -97,6 +97,40 @@ const topZ = (items: Item[]) =>
   items.reduce((m, it) => Math.max(m, it.z), 0);
 
 const touch = (board: Board): Board => ({ ...board, updatedAt: Date.now() });
+
+// Connector geometry tracks endpoint positions. After any change to items, we
+// recompute each connector's bbox to enclose its endpoints' centres, and drop
+// connectors whose `from` or `to` items no longer exist.
+const reconcileConnectors = (items: Item[]): Item[] => {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const live = items.filter((it) => {
+    if (it.type !== "connector") return true;
+    return (
+      byId.has(it.from) && byId.has(it.to) && it.from !== it.to
+    );
+  });
+  return live.map((it) => {
+    if (it.type !== "connector") return it;
+    const a = byId.get(it.from)!;
+    const b = byId.get(it.to)!;
+    const fc = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+    const tc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    return {
+      ...it,
+      x: Math.min(fc.x, tc.x),
+      y: Math.min(fc.y, tc.y),
+      w: Math.abs(tc.x - fc.x),
+      h: Math.abs(tc.y - fc.y),
+    };
+  });
+};
+
+// Wrap a board change so connector geometry stays consistent with item moves
+// and deletions. Cheap to call after every reducer step; the work is O(items).
+const withConnectorsReconciled = (board: Board): Board => ({
+  ...board,
+  items: reconcileConnectors(board.items),
+});
 
 const apply = (state: State, action: Action): State => {
   switch (action.type) {
@@ -334,7 +368,11 @@ const reducer = (state: State, action: Action): State => {
     };
   }
 
-  const next = apply(state, action);
+  let next = apply(state, action);
+  // Keep connector geometry consistent with item moves/deletes.
+  if (next.board !== state.board) {
+    next = { ...next, board: withConnectorsReconciled(next.board) };
+  }
   if (HISTORY_ACTIONS.has(action.type)) {
     return {
       ...next,
@@ -388,17 +426,31 @@ const loadInitial = (): State => {
   return fresh;
 };
 
+export type SaveStatus = {
+  // Last time we successfully wrote to localStorage. null until first save.
+  savedAt: number | null;
+  // True between a board change and the next successful save.
+  pending: boolean;
+};
+
 export const useStore = () => {
   const [state, dispatch] = useReducer(reducer, undefined, loadInitial);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({
+    savedAt: null,
+    pending: false,
+  });
 
   // Debounced autosave to localStorage. We persist whenever the board content
   // (not just transient view/selection) changes.
   useEffect(() => {
+    setSaveStatus((s) => ({ ...s, pending: true }));
     const t = setTimeout(() => {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.board));
+        setSaveStatus({ savedAt: Date.now(), pending: false });
       } catch {
         // Quota exceeded, etc. — non-fatal.
+        setSaveStatus((s) => ({ ...s, pending: false }));
       }
     }, 250);
     return () => clearTimeout(t);
@@ -419,5 +471,5 @@ export const useStore = () => {
     [state.board.items, state.selection],
   );
 
-  return { state, dispatch, selectedItems };
+  return { state, dispatch, selectedItems, saveStatus };
 };

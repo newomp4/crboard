@@ -48,7 +48,14 @@ export const exportToHtml = (board: Board): string => {
   .item.text{padding:12px;line-height:1.4;background:#fff;border:1px solid #e5e5e5;
     white-space:pre-wrap;overflow:auto}
   .item.image img{width:100%;height:100%;object-fit:contain;display:block;background:#fafafa}
-  .item.embed iframe{width:100%;height:100%;border:1px solid #e5e5e5;background:#fafafa;display:block}
+  .item.embed{display:flex;flex-direction:column;background:#fafafa;border:1px solid #e5e5e5;overflow:hidden}
+  .item.embed .frame-wrap{flex:1;position:relative;min-height:0}
+  .item.embed iframe{width:100%;height:100%;border:0;background:#fafafa;display:block}
+  .item.embed .src-link{display:flex;align-items:center;gap:6px;padding:6px 10px;
+    border-top:1px solid #e5e5e5;background:#fff;font-size:11px;color:#525252;
+    text-decoration:none;flex-shrink:0}
+  .item.embed .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item.embed .src-link b{color:#0a0a0a;font-weight:500}
   .item.link{display:flex;flex-direction:column;justify-content:center;padding:16px;
     background:#fff;border:1px solid #e5e5e5;text-decoration:none;color:#0a0a0a;font-size:14px;
     word-break:break-word}
@@ -130,11 +137,25 @@ const VIEWER_JS = `
       var img=document.createElement('img'); img.src=it.src; img.alt=it.alt||''; img.draggable=false;
       el.appendChild(img);
     } else if(it.type==='embed'){
+      var wrap=document.createElement('div'); wrap.className='frame-wrap';
       var f=document.createElement('iframe'); f.src=detectEmbed(it.url)||it.url;
       f.setAttribute('allow','autoplay; encrypted-media; picture-in-picture; fullscreen');
       f.setAttribute('allowfullscreen','');
       f.setAttribute('sandbox','allow-scripts allow-same-origin allow-popups allow-forms allow-presentation');
-      el.appendChild(f);
+      wrap.appendChild(f);
+      el.appendChild(wrap);
+
+      // Source-link footer: matches editor styling, opens original page in a new tab.
+      var host='', path='';
+      try{var su=new URL(it.url); host=su.hostname.replace(/^www\\./,''); path=su.pathname+su.search;}catch(e){host=it.url;}
+      var srcA=document.createElement('a'); srcA.className='src-link';
+      srcA.href=it.url; srcA.target='_blank'; srcA.rel='noreferrer'; srcA.title=it.url;
+      var pathHtml=(path&&path!=='/')?escapeHtml(path):'';
+      srcA.innerHTML='<span class="label"><b>'+escapeHtml(host)+'</b>'+pathHtml+'</span>'+
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+        '<path d="M14 5h5v5"/><path d="M19 5l-9 9"/><path d="M19 13v6H5V5h6"/></svg>';
+      srcA.addEventListener('pointerdown',function(e){e.stopPropagation();});
+      el.appendChild(srcA);
     } else if(it.type==='link'){
       var a=document.createElement('a'); a.href=it.url; a.target='_blank'; a.rel='noreferrer';
       var host=''; try{host=new URL(it.url).hostname}catch(e){}

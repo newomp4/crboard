@@ -22,10 +22,24 @@ Then open the printed URL (usually http://localhost:5173).
 - **Zoom**: ⌘/ctrl + scroll, or pinch on a trackpad.
 - **Add text**: pick the text tool (T), click anywhere, type. Double-click to edit again.
 - **Add image**: click the image button — or paste an image from your clipboard, or drag an image file onto the canvas.
-- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok auto-detect into a playable embed; everything else becomes a link card.
+- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
 - **Draw**: pick the pen tool (P), drag.
 - **Move / resize**: select an item with V (or just click), drag to move, drag corners to resize.
-- **Delete**: select, then Backspace.
+- **Click an embed once to select it** (the iframe is dim-locked while unselected so the wrapper can capture the click); click again — or click anywhere inside it after selection — to interact with the embedded page.
+
+### Shortcuts
+
+| | |
+|---|---|
+| `V` / `T` / `P` | Select / Text / Pen |
+| `⌘Z` | Undo |
+| `⇧⌘Z` or `⌘Y` | Redo |
+| `⌘D` | Duplicate selection |
+| `⌘A` | Select all |
+| Arrow keys | Nudge 1px (`⇧`+arrow = 10px) |
+| `Backspace` / `Delete` | Delete selection |
+| `Esc` | Deselect |
+| Hold `Space` + drag | Pan from any tool |
 
 Boards autosave to your browser. **File → Save as `.crboard`** keeps a
 portable JSON copy on disk.

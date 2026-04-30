@@ -437,24 +437,6 @@ const LinkIcon = () => (
   </Stroke>
 );
 
-// keyboard shortcuts for tools
-export const useToolShortcuts = (
-  dispatch: React.Dispatch<Action>,
-) => {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.isContentEditable || t?.tagName === "INPUT" || t?.tagName === "TEXTAREA") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "v" || e.key === "V") dispatch({ type: "setTool", tool: "select" });
-      if (e.key === "t" || e.key === "T") dispatch({ type: "setTool", tool: "text" });
-      if (e.key === "p" || e.key === "P") dispatch({ type: "setTool", tool: "pen" });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch]);
-};
-
 const imageSize = (src: string): Promise<{ w: number; h: number }> =>
   new Promise((resolve) => {
     const img = new Image();

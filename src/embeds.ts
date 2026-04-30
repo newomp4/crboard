@@ -43,12 +43,15 @@ export const detectEmbed = (input: string): EmbedInfo | null => {
     return null;
   }
 
+  // Default sizes include room for the ~28px source-link footer below the iframe.
+  const FOOTER = 28;
+
   const yt = youtubeId(url);
   if (yt) {
     return {
       provider: "youtube",
       embedUrl: `https://www.youtube.com/embed/${yt}`,
-      defaultSize: { w: 560, h: 315 },
+      defaultSize: { w: 560, h: 315 + FOOTER },
     };
   }
 
@@ -57,7 +60,7 @@ export const detectEmbed = (input: string): EmbedInfo | null => {
     return {
       provider: "instagram",
       embedUrl: `https://www.instagram.com/${ig}/embed/`,
-      defaultSize: { w: 360, h: 640 },
+      defaultSize: { w: 360, h: 640 + FOOTER },
     };
   }
 
@@ -66,17 +69,14 @@ export const detectEmbed = (input: string): EmbedInfo | null => {
     return {
       provider: "tiktok",
       embedUrl: `https://www.tiktok.com/embed/v2/${tt}`,
-      defaultSize: { w: 340, h: 600 },
+      defaultSize: { w: 340, h: 600 + FOOTER },
     };
   }
 
-  // Generic fallback — many sites set X-Frame-Options and will refuse to load.
-  // We try anyway; if blocked, the user sees a blank frame and can convert it
-  // to a link card.
   return {
     provider: "generic",
     embedUrl: input,
-    defaultSize: { w: 480, h: 360 },
+    defaultSize: { w: 480, h: 360 + FOOTER },
   };
 };
 

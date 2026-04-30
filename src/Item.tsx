@@ -12,6 +12,7 @@ import { detectEmbed } from "./embeds";
 type Props = {
   item: Item;
   selected: boolean;
+  autoEdit?: boolean;
   view: View;
   tool: "select" | "text" | "pen";
   dispatch: React.Dispatch<Action>;
@@ -19,9 +20,26 @@ type Props = {
 
 const HANDLE_SIZE = 10;
 
-export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
+export const ItemView = ({
+  item,
+  selected,
+  autoEdit,
+  view,
+  tool,
+  dispatch,
+}: Props) => {
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
+
+  // When the store flags this item as the one to edit immediately (e.g. it
+  // was just created via the text tool), drop into edit mode and clear the
+  // flag so a re-render doesn't keep retriggering it.
+  useEffect(() => {
+    if (autoEdit && item.type === "text") {
+      setEditing(true);
+      dispatch({ type: "setEditId", id: null });
+    }
+  }, [autoEdit, item.type, dispatch]);
 
   const startMove = useCallback(
     (e: React.PointerEvent) => {
@@ -40,6 +58,10 @@ export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
       }
       dispatch({ type: "bringToFront", id: item.id });
 
+      // Snapshot pre-drag state for undo. We record once per gesture so the
+      // drag is one history step, not hundreds.
+      let committed = false;
+
       const startX = e.clientX;
       const startY = e.clientY;
       const origX = item.x;
@@ -48,6 +70,11 @@ export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / view.zoom;
         const dy = (ev.clientY - startY) / view.zoom;
+        if (dx === 0 && dy === 0) return;
+        if (!committed) {
+          dispatch({ type: "commitHistory" });
+          committed = true;
+        }
         dispatch({
           type: "updateItem",
           id: item.id,
@@ -70,6 +97,8 @@ export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
       e.preventDefault();
       (e.target as Element).setPointerCapture?.(e.pointerId);
 
+      let committed = false;
+
       const startX = e.clientX;
       const startY = e.clientY;
       const orig = { x: item.x, y: item.y, w: item.w, h: item.h };
@@ -77,6 +106,11 @@ export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / view.zoom;
         const dy = (ev.clientY - startY) / view.zoom;
+        if (dx === 0 && dy === 0) return;
+        if (!committed) {
+          dispatch({ type: "commitHistory" });
+          committed = true;
+        }
         let { x, y, w, h } = orig;
         if (corner === "br") {
           w = Math.max(40, orig.w + dx);
@@ -129,7 +163,13 @@ export const ItemView = ({ item, selected, view, tool, dispatch }: Props) => {
       }}
       className={selected ? "selection-ring" : ""}
     >
-      <ItemBody item={item} editing={editing} setEditing={setEditing} dispatch={dispatch} />
+      <ItemBody
+        item={item}
+        selected={selected}
+        editing={editing}
+        setEditing={setEditing}
+        dispatch={dispatch}
+      />
 
       {selected && tool === "select" && (
         <>
@@ -169,11 +209,13 @@ const Handle = ({
 
 const ItemBody = ({
   item,
+  selected,
   editing,
   setEditing,
   dispatch,
 }: {
   item: Item;
+  selected: boolean;
   editing: boolean;
   setEditing: (v: boolean) => void;
   dispatch: React.Dispatch<Action>;
@@ -205,7 +247,7 @@ const ItemBody = ({
         />
       );
     case "embed":
-      return <EmbedBody item={item} />;
+      return <EmbedBody item={item} selected={selected} />;
     case "link":
       return (
         <a
@@ -298,25 +340,137 @@ const TextBody = ({
   );
 };
 
-const EmbedBody = ({ item }: { item: Extract<Item, { type: "embed" }> }) => {
+// Embeds get two affordances on top of a plain iframe:
+//   1. A "click to interact" overlay while the item isn't selected. iframes
+//      capture every click that lands on them, which makes it impossible to
+//      *select* the item to move/resize/delete. We cover the iframe with a
+//      transparent div until it's selected — first click selects, then the
+//      overlay disappears and subsequent clicks reach the iframe normally.
+//   2. A small footer showing the source URL, clickable. So you can both watch
+//      the embed and jump to the original page.
+const EmbedBody = ({
+  item,
+  selected,
+}: {
+  item: Extract<Item, { type: "embed" }>;
+  selected: boolean;
+}) => {
   const info = detectEmbed(item.url);
   const src = info?.embedUrl ?? item.url;
+
   return (
-    <iframe
-      src={src}
+    <div
       style={{
+        display: "flex",
+        flexDirection: "column",
         width: "100%",
         height: "100%",
-        border: "1px solid #e5e5e5",
         background: "#fafafa",
-        display: "block",
+        border: "1px solid #e5e5e5",
+        overflow: "hidden",
       }}
-      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-      allowFullScreen
-      sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-presentation"
-    />
+    >
+      <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+        <iframe
+          src={src}
+          style={{
+            width: "100%",
+            height: "100%",
+            border: 0,
+            background: "#fafafa",
+            display: "block",
+          }}
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          allowFullScreen
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-presentation"
+        />
+        {!selected && (
+          <div
+            // Pointer events on this overlay are what let the wrapper's
+            // onPointerDown fire — without it, the iframe would eat the click.
+            style={{
+              position: "absolute",
+              inset: 0,
+              cursor: "pointer",
+              background: "transparent",
+            }}
+          />
+        )}
+      </div>
+      <SourceLinkFooter url={item.url} />
+    </div>
   );
 };
+
+// A thin "where this came from" bar. Stays within the item's bounds so it
+// scales with resize. Truncates with ellipsis on narrow embeds.
+const SourceLinkFooter = ({ url }: { url: string }) => {
+  let host = url;
+  let path = "";
+  try {
+    const u = new URL(url);
+    host = u.hostname.replace(/^www\./, "");
+    path = u.pathname + u.search;
+  } catch {
+    /* leave as-is */
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      // Don't let clicks/drags here trigger item selection or move.
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      title={url}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderTop: "1px solid #e5e5e5",
+        background: "#ffffff",
+        fontSize: 11,
+        color: "#525252",
+        textDecoration: "none",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        <span style={{ color: "#0a0a0a", fontWeight: 500 }}>{host}</span>
+        {path && path !== "/" ? <span>{path}</span> : null}
+      </span>
+      <ExternalIcon />
+    </a>
+  );
+};
+
+const ExternalIcon = () => (
+  <svg
+    width="11"
+    height="11"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ flexShrink: 0 }}
+    aria-hidden
+  >
+    <path d="M14 5h5v5" />
+    <path d="M19 5l-9 9" />
+    <path d="M19 13v6H5V5h6" />
+  </svg>
+);
 
 const DrawingBody = ({
   item,

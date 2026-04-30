@@ -4,7 +4,8 @@
 
 import { useEffect } from "react";
 import { Canvas } from "./Canvas";
-import { Toolbar, useToolShortcuts } from "./Toolbar";
+import { Toolbar } from "./Toolbar";
+import { useToolShortcuts } from "./shortcuts";
 import { useStore } from "./store";
 import { detectEmbed, looksLikeImageUrl, looksLikeUrl } from "./embeds";
 import { fileToDataUrl } from "./io";

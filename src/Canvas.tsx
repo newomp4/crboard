@@ -18,7 +18,7 @@ type Props = {
 };
 
 export const Canvas = ({ state, dispatch }: Props) => {
-  const { board, selection, tool } = state;
+  const { board, selection, tool, editId } = state;
   const containerRef = useRef<HTMLDivElement>(null);
   const [spaceDown, setSpaceDown] = useState(false);
 
@@ -55,15 +55,72 @@ export const Canvas = ({ state, dispatch }: Props) => {
     };
   }, []);
 
-  // Delete selection on Backspace/Delete.
+  // Editing keyboard shortcuts: delete, escape, undo/redo, duplicate, nudge, select-all.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t?.isContentEditable || t?.tagName === "INPUT" || t?.tagName === "TEXTAREA") return;
+
+      const mod = e.metaKey || e.ctrlKey;
+
+      // Undo / redo. Cmd+Z, Shift+Cmd+Z or Cmd+Y.
+      if (mod && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        dispatch({ type: "undo" });
+        return;
+      }
+      if (
+        (mod && e.shiftKey && (e.key === "z" || e.key === "Z")) ||
+        (mod && (e.key === "y" || e.key === "Y"))
+      ) {
+        e.preventDefault();
+        dispatch({ type: "redo" });
+        return;
+      }
+
+      // Select all.
+      if (mod && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        dispatch({
+          type: "selectOnly",
+          ids: state.board.items.map((it) => it.id),
+        });
+        return;
+      }
+
+      // Duplicate selection.
+      if (mod && (e.key === "d" || e.key === "D") && selection.size > 0) {
+        e.preventDefault();
+        dispatch({ type: "duplicateItems", ids: [...selection] });
+        return;
+      }
+
+      // Delete.
       if ((e.key === "Backspace" || e.key === "Delete") && selection.size > 0) {
         e.preventDefault();
         dispatch({ type: "removeItems", ids: [...selection] });
+        return;
       }
+
+      // Arrow-key nudge: 1px, or 10px with shift.
+      if (
+        selection.size > 0 &&
+        (e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown")
+      ) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        // Each arrow press is its own undo entry — that's fine, users
+        // expect arrow nudges to be undoable individually.
+        dispatch({ type: "commitHistory" });
+        dispatch({ type: "nudgeItems", ids: [...selection], dx, dy });
+        return;
+      }
+
       if (e.key === "Escape") {
         dispatch({ type: "clearSelection" });
         dispatch({ type: "setTool", tool: "select" });
@@ -71,7 +128,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, dispatch]);
+  }, [selection, state.board.items, dispatch]);
 
   // Wheel handler — needs preventDefault so we attach via ref with passive:false.
   useEffect(() => {
@@ -141,6 +198,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
     if (tool === "text") {
       dispatch({
         type: "addItem",
+        edit: true,
         item: {
           type: "text",
           x: world.x,
@@ -276,6 +334,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
             key={it.id}
             item={it}
             selected={selection.has(it.id)}
+            autoEdit={editId === it.id}
             view={board.view}
             tool={tool}
             dispatch={dispatch}

@@ -242,6 +242,10 @@ export const Toolbar = ({ state, dispatch }: Props) => {
         <PenOptions pen={state.pen} theme={state.theme} dispatch={dispatch} />
       )}
 
+      {tool === "select" && hasSelectedText(state) && (
+        <TextOptions state={state} dispatch={dispatch} />
+      )}
+
       <div
         style={{
           position: "fixed",
@@ -397,6 +401,109 @@ const PenOptions = ({
       );
     })}
   </div>
+  );
+};
+
+// True when at least one selected item is a text item — controls visibility
+// of the text-style preset panel.
+const hasSelectedText = (state: State) =>
+  state.board.items.some(
+    (it) => it.type === "text" && state.selection.has(it.id),
+  );
+
+// Text size presets. Each click writes fontSize + fontWeight on every selected
+// text item (other selected items are unaffected).
+const TEXT_PRESETS: { label: string; size: number; weight: number }[] = [
+  { label: "Small", size: 12, weight: 400 },
+  { label: "Body", size: 16, weight: 400 },
+  { label: "Heading", size: 22, weight: 600 },
+  { label: "Title", size: 32, weight: 700 },
+];
+
+const TextOptions = ({
+  state,
+  dispatch,
+}: {
+  state: State;
+  dispatch: React.Dispatch<Action>;
+}) => {
+  // Read the current size from any one selected text item to highlight the
+  // active preset (rough match, since the user might have an arbitrary size).
+  const sample = state.board.items.find(
+    (it): it is Extract<typeof it, { type: "text" }> =>
+      it.type === "text" && state.selection.has(it.id),
+  );
+
+  const apply = (size: number, weight: number) => {
+    dispatch({ type: "commitHistory" });
+    for (const it of state.board.items) {
+      if (it.type !== "text" || !state.selection.has(it.id)) continue;
+      dispatch({
+        type: "updateItem",
+        id: it.id,
+        patch: { fontSize: size, fontWeight: weight },
+      });
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 64,
+        left: "50%",
+        transform: "translateX(-50%)",
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: 4,
+        background: "var(--chrome-bg)",
+        border: "1px solid var(--border)",
+        backdropFilter: "blur(8px)",
+        zIndex: 1000,
+      }}
+    >
+      {TEXT_PRESETS.map((p) => {
+        const active =
+          sample !== undefined &&
+          sample.fontSize === p.size &&
+          (sample.fontWeight ?? 400) === p.weight;
+        return (
+          <button
+            key={p.label}
+            onClick={() => apply(p.size, p.weight)}
+            title={`${p.label} (${p.size}px${p.weight >= 600 ? " bold" : ""})`}
+            style={{
+              minWidth: 48,
+              height: 32,
+              padding: "0 10px",
+              background: active ? "var(--text)" : "transparent",
+              color: active ? "var(--bg)" : "var(--text)",
+              fontSize: 12,
+            }}
+            onMouseEnter={(e) => {
+              if (!active) e.currentTarget.style.background = "var(--hover)";
+            }}
+            onMouseLeave={(e) => {
+              if (!active) e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <span
+              style={{
+                // Show a glyph hint sized to roughly match the preset.
+                fontSize: Math.min(16, p.size * 0.6),
+                fontWeight: p.weight,
+                marginRight: 6,
+                fontFamily: "ui-serif, Georgia, serif",
+              }}
+            >
+              T
+            </span>
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
   );
 };
 

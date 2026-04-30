@@ -441,6 +441,9 @@ export const Canvas = ({ state, dispatch }: Props) => {
             key={it.id}
             item={it}
             selected={selection.has(it.id)}
+            // Hide the per-item selection chrome while a multi-select is
+            // active — the group bounding box draws its own.
+            suppressIndividualHandles={selection.size > 1}
             autoEdit={editId === it.id}
             view={board.view}
             tool={tool}
@@ -450,6 +453,15 @@ export const Canvas = ({ state, dispatch }: Props) => {
             dispatch={dispatch}
           />
         ))}
+
+        {/* Group bounding box + 8 handles when 2+ items are selected. */}
+        {selection.size > 1 && (
+          <MultiSelection
+            items={board.items.filter((it) => selection.has(it.id))}
+            view={board.view}
+            dispatch={dispatch}
+          />
+        )}
 
         {activeStroke && activeStroke.points.length > 0 && (
           <svg
@@ -502,6 +514,222 @@ export const Canvas = ({ state, dispatch }: Props) => {
       )}
     </div>
   );
+};
+
+// ---------- group transform ----------
+
+// Renders a single bounding box around all selected items with 8 resize
+// handles. Each handle scales every selected item proportionally relative to
+// the bounding box. The math:
+//   - capture each item's origin (x, y, w, h, fontSize?) at gesture start
+//   - each frame, compute new bbox dims based on which handle and dx/dy
+//   - sx = newW/origBboxW, sy = newH/origBboxH
+//   - newItem.x = newBbox.x + (origItem.x - origBbox.x) * sx
+//   - etc.
+// Text font size scales by min(sx, sy) so headings shrink smoothly with the
+// group rather than overflowing.
+const MultiSelection = ({
+  items,
+  view,
+  dispatch,
+}: {
+  items: Item[];
+  view: { x: number; y: number; zoom: number };
+  dispatch: React.Dispatch<Action>;
+}) => {
+  if (items.length === 0) return null;
+
+  // Bbox in world coords.
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const it of items) {
+    if (it.x < minX) minX = it.x;
+    if (it.y < minY) minY = it.y;
+    if (it.x + it.w > maxX) maxX = it.x + it.w;
+    if (it.y + it.h > maxY) maxY = it.y + it.h;
+  }
+  const bbox = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+
+  const startResize = (handle: HandlePosLong) => (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+
+    const left = handle.includes("l");
+    const right = handle.includes("r");
+    const top = handle.includes("t");
+    const bottom = handle.includes("b");
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const orig = { ...bbox };
+    const aspect = orig.w / orig.h;
+    // Origins for every selected item.
+    const origins = items.map((it) => ({
+      id: it.id,
+      x: it.x,
+      y: it.y,
+      w: it.w,
+      h: it.h,
+      fontSize: it.type === "text" ? it.fontSize : undefined,
+    }));
+
+    let committed = false;
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = (ev.clientX - startX) / view.zoom;
+      const dy = (ev.clientY - startY) / view.zoom;
+      if (dx === 0 && dy === 0) return;
+      if (!committed) {
+        dispatch({ type: "commitHistory" });
+        committed = true;
+      }
+
+      // Default for groups is proportional (locked); shift frees it up.
+      const locked = !ev.shiftKey;
+
+      // Unconstrained candidate dims, clamped to a sane minimum.
+      let nw = orig.w;
+      let nh = orig.h;
+      if (left) nw = orig.w - dx;
+      else if (right) nw = orig.w + dx;
+      if (top) nh = orig.h - dy;
+      else if (bottom) nh = orig.h + dy;
+      nw = Math.max(20, nw);
+      nh = Math.max(20, nh);
+
+      if (locked) {
+        const cornerHandle = (left || right) && (top || bottom);
+        if (cornerHandle) {
+          const rW = nw / orig.w;
+          const rH = nh / orig.h;
+          if (Math.abs(rW - 1) >= Math.abs(rH - 1)) nh = nw / aspect;
+          else nw = nh * aspect;
+        } else if (left || right) {
+          nh = nw / aspect;
+        } else {
+          nw = nh * aspect;
+        }
+      }
+
+      let nx = orig.x;
+      let ny = orig.y;
+      if (left) nx = orig.x + (orig.w - nw);
+      if (top) ny = orig.y + (orig.h - nh);
+
+      const sx = nw / orig.w;
+      const sy = nh / orig.h;
+      const fScale = Math.min(sx, sy);
+
+      const transforms = origins.map((o) => {
+        const newX = nx + (o.x - orig.x) * sx;
+        const newY = ny + (o.y - orig.y) * sy;
+        const newW = Math.max(8, o.w * sx);
+        const newH = Math.max(8, o.h * sy);
+        const next: {
+          id: string;
+          x: number;
+          y: number;
+          w: number;
+          h: number;
+          fontSize?: number;
+        } = { id: o.id, x: newX, y: newY, w: newW, h: newH };
+        if (o.fontSize !== undefined) {
+          next.fontSize = Math.max(8, Math.round(o.fontSize * fScale));
+        }
+        return next;
+      });
+      dispatch({ type: "transformItems", transforms });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: bbox.x,
+        top: bbox.y,
+        width: bbox.w,
+        height: bbox.h,
+        outline: "2px solid var(--selection)",
+        outlineOffset: 2,
+        // The frame itself shouldn't intercept clicks — let them reach items
+        // underneath. Only the handles below get pointer events.
+        pointerEvents: "none",
+      }}
+    >
+      {(["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePosLong[]).map(
+        (p) => (
+          <GroupHandle key={p} pos={p} onPointerDown={startResize(p)} />
+        ),
+      )}
+    </div>
+  );
+};
+
+type HandlePosLong = "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r";
+
+// Independent copy of the resize handle visuals — kept separate so it can
+// re-enable pointerEvents on top of the parent's pointer-events:none.
+const GroupHandle = ({
+  pos,
+  onPointerDown,
+}: {
+  pos: HandlePosLong;
+  onPointerDown: (e: React.PointerEvent) => void;
+}) => {
+  const cursors = {
+    tl: "nwse-resize",
+    br: "nwse-resize",
+    tr: "nesw-resize",
+    bl: "nesw-resize",
+    t: "ns-resize",
+    b: "ns-resize",
+    l: "ew-resize",
+    r: "ew-resize",
+  } as const;
+  const SIZE = 10;
+  const offset = -SIZE / 2 - 2;
+  const isCorner = pos.length === 2;
+
+  const style: React.CSSProperties = {
+    position: "absolute",
+    width: SIZE,
+    height: SIZE,
+    background: "var(--surface-2)",
+    border: "1.5px solid var(--selection)",
+    cursor: cursors[pos],
+    pointerEvents: "auto",
+    touchAction: "none",
+  };
+
+  if (isCorner) {
+    if (pos.includes("t")) style.top = offset;
+    else style.bottom = offset;
+    if (pos.includes("l")) style.left = offset;
+    else style.right = offset;
+  } else {
+    if (pos === "t" || pos === "b") {
+      style.left = "50%";
+      style.transform = "translateX(-50%)";
+      if (pos === "t") style.top = offset;
+      else style.bottom = offset;
+    } else {
+      style.top = "50%";
+      style.transform = "translateY(-50%)";
+      if (pos === "l") style.left = offset;
+      else style.right = offset;
+    }
+  }
+  return <div style={style} onPointerDown={onPointerDown} />;
 };
 
 // ---------- context menu ----------

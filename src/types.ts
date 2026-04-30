@@ -29,6 +29,7 @@ export type TextItem = Base & {
   type: "text";
   text: string;
   fontSize: number;
+  fontWeight?: number; // 400 = body, 600 = heading. Defaults to 400 if omitted.
 };
 
 export type ImageItem = Base & {

@@ -12,6 +12,9 @@ import { detectEmbed } from "./embeds";
 type Props = {
   item: Item;
   selected: boolean;
+  // When a multi-select is active, the group bounding box draws its own handles
+  // and we hide the per-item handles to avoid two overlapping sets.
+  suppressIndividualHandles?: boolean;
   autoEdit?: boolean;
   view: View;
   tool: "select" | "text" | "pen";
@@ -32,6 +35,7 @@ const MIN_TEXT_H = 48;
 export const ItemView = ({
   item,
   selected,
+  suppressIndividualHandles,
   autoEdit,
   view,
   tool,
@@ -42,6 +46,11 @@ export const ItemView = ({
 }: Props) => {
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
+  // For embeds: double-click "engages" the iframe so clicks/drags inside reach
+  // the embedded page (play, scrub, expand). Until then, the embed is locked
+  // behind a transparent overlay so dragging the wrapper always moves it
+  // instead of accidentally interacting with Twitter/YouTube/etc.
+  const [interactive, setInteractive] = useState(false);
 
   // When the store flags this item as the one to edit immediately (e.g. it
   // was just created via the text tool), drop into edit mode and clear the
@@ -52,6 +61,26 @@ export const ItemView = ({
       dispatch({ type: "setEditId", id: null });
     }
   }, [autoEdit, item.type, dispatch]);
+
+  // Losing selection always exits edit/interactive mode — keeps the two
+  // states in sync without a flicker.
+  useEffect(() => {
+    if (!selected) {
+      setEditing(false);
+      setInteractive(false);
+    }
+  }, [selected]);
+
+  // Esc exits embed-interactive mode (text edit handles its own Esc inside
+  // the textarea).
+  useEffect(() => {
+    if (!interactive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setInteractive(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [interactive]);
 
   const startMove = useCallback(
     (e: React.PointerEvent) => {
@@ -203,6 +232,7 @@ export const ItemView = ({
       onPointerDown={startMove}
       onDoubleClick={() => {
         if (item.type === "text") setEditing(true);
+        else if (item.type === "embed") setInteractive(true);
       }}
       onContextMenu={(e) => {
         if (editing) return;
@@ -230,19 +260,23 @@ export const ItemView = ({
         item={item}
         selected={selected}
         editing={editing}
+        interactive={interactive}
         setEditing={setEditing}
         dispatch={dispatch}
       />
 
-      {selected && tool === "select" && !editing && (
-        <>
-          {(["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[]).map(
-            (p) => (
-              <Handle key={p} pos={p} onPointerDown={startResize(p)} />
-            ),
-          )}
-        </>
-      )}
+      {selected &&
+        tool === "select" &&
+        !editing &&
+        !suppressIndividualHandles && (
+          <>
+            {(["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[]).map(
+              (p) => (
+                <Handle key={p} pos={p} onPointerDown={startResize(p)} />
+              ),
+            )}
+          </>
+        )}
     </div>
   );
 };
@@ -310,12 +344,14 @@ const ItemBody = ({
   item,
   selected,
   editing,
+  interactive,
   setEditing,
   dispatch,
 }: {
   item: Item;
   selected: boolean;
   editing: boolean;
+  interactive: boolean;
   setEditing: (v: boolean) => void;
   dispatch: React.Dispatch<Action>;
 }) => {
@@ -346,7 +382,7 @@ const ItemBody = ({
         />
       );
     case "embed":
-      return <EmbedBody item={item} selected={selected} />;
+      return <EmbedBody item={item} interactive={interactive} />;
     case "link":
       return <LinkBody item={item} selected={selected} />;
     case "drawing":
@@ -399,7 +435,7 @@ const TextBody = ({
         patch: { h: measured } as Partial<Item>,
       });
     }
-  }, [item.text, item.w, item.fontSize, item.h, item.id, dispatch]);
+  }, [item.text, item.w, item.fontSize, item.fontWeight, item.h, item.id, dispatch]);
 
   // Drop into editing → focus + place caret at end.
   useEffect(() => {
@@ -451,7 +487,8 @@ const TextBody = ({
         padding: 12,
         margin: 0,
         fontSize: item.fontSize,
-        lineHeight: 1.4,
+        fontWeight: item.fontWeight ?? 400,
+        lineHeight: 1.35,
         fontFamily: "inherit",
         color: "var(--text)",
         background: "var(--surface-2)",
@@ -589,20 +626,20 @@ const LinkBody = ({
   );
 };
 
-// Embeds get two affordances on top of a plain iframe:
-//   1. A "click to interact" overlay while the item isn't selected. iframes
-//      capture every click that lands on them, which makes it impossible to
-//      *select* the item to move/resize/delete. We cover the iframe with a
-//      transparent div until it's selected — first click selects, then the
-//      overlay disappears and subsequent clicks reach the iframe normally.
-//   2. A small footer showing the source URL, clickable. So you can both watch
-//      the embed and jump to the original page.
+// Embeds wrap an iframe with two affordances:
+//   1. A transparent "click to interact" overlay that's ALWAYS on until the
+//      user double-clicks to "engage" the embed (interactive=true). While
+//      locked, every click on the embed is caught by the overlay so the
+//      wrapper can select/drag/resize the item without the iframe stealing
+//      the gesture (the old "click selects an embed once and then the iframe
+//      hijacks every drag" problem).
+//   2. A small footer showing the source URL, clickable, that always works.
 const EmbedBody = ({
   item,
-  selected,
+  interactive,
 }: {
   item: Extract<Item, { type: "embed" }>;
-  selected: boolean;
+  interactive: boolean;
 }) => {
   const info = detectEmbed(item.url);
   const src = info?.embedUrl ?? item.url;
@@ -628,22 +665,46 @@ const EmbedBody = ({
             border: 0,
             background: "var(--bg)",
             display: "block",
+            // While locked, ignore the iframe entirely so no stray hover/drag
+            // events leak into Twitter/YouTube/etc.
+            pointerEvents: interactive ? "auto" : "none",
           }}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-presentation"
         />
-        {!selected && (
+        {!interactive && (
           <div
-            // Pointer events on this overlay are what let the wrapper's
-            // onPointerDown fire — without it, the iframe would eat the click.
+            // The overlay both blocks iframe interaction and gives the user
+            // a hint to "double-click to play" via cursor + a tiny badge.
             style={{
               position: "absolute",
               inset: 0,
-              cursor: "pointer",
+              cursor: "default",
               background: "transparent",
             }}
+            title="Double-click to interact (Esc to exit)"
           />
+        )}
+        {interactive && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              right: 6,
+              top: 6,
+              fontSize: 10,
+              padding: "2px 6px",
+              color: "var(--text-2)",
+              background: "var(--chrome-bg)",
+              border: "1px solid var(--border)",
+              pointerEvents: "none",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+            }}
+          >
+            Esc to exit
+          </div>
         )}
       </div>
       <SourceLinkFooter url={item.url} />

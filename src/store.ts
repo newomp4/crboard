@@ -42,6 +42,20 @@ export type Action =
   | { type: "addItems"; items: ItemDraft[] }
   | { type: "updateItem"; id: string; patch: Partial<Item> }
   | { type: "setItemPositions"; positions: { id: string; x: number; y: number }[] }
+  | {
+      type: "transformItems";
+      // Each entry sets the absolute geometry of one item. fontSize is optional
+      // and applies only to text items (used by group resize so heading/body
+      // sizes shrink in proportion when a group is scaled down).
+      transforms: {
+        id: string;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        fontSize?: number;
+      }[];
+    }
   | { type: "removeItems"; ids: string[] }
   | { type: "duplicateItems"; ids: string[]; offset?: { x: number; y: number } }
   | { type: "nudgeItems"; ids: string[]; dx: number; dy: number }
@@ -132,6 +146,25 @@ const apply = (state: State, action: Action): State => {
           items: state.board.items.map((it) => {
             const p = map.get(it.id);
             return p ? { ...it, x: p.x, y: p.y } : it;
+          }),
+        }),
+      };
+    }
+    case "transformItems": {
+      const map = new Map(action.transforms.map((t) => [t.id, t]));
+      if (map.size === 0) return state;
+      return {
+        ...state,
+        board: touch({
+          ...state.board,
+          items: state.board.items.map((it) => {
+            const t = map.get(it.id);
+            if (!t) return it;
+            const next = { ...it, x: t.x, y: t.y, w: t.w, h: t.h };
+            if (it.type === "text" && typeof t.fontSize === "number") {
+              return { ...next, fontSize: t.fontSize };
+            }
+            return next;
           }),
         }),
       };

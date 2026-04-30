@@ -142,6 +142,22 @@ export const Canvas = ({ state, dispatch }: Props) => {
         return;
       }
 
+      // Cmd+J: zoom-to-selection. Same math as fit-content, but only the
+      // selected items.
+      if (mod && (e.key === "j" || e.key === "J") && selection.size > 0) {
+        e.preventDefault();
+        const el = containerRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const sel = state.board.items.filter((it) => selection.has(it.id));
+        if (sel.length === 0) return;
+        dispatch({
+          type: "setView",
+          view: fitToBounds(sel, r.width, r.height),
+        });
+        return;
+      }
+
       // Delete.
       if ((e.key === "Backspace" || e.key === "Delete") && selection.size > 0) {
         e.preventDefault();

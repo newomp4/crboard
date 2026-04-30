@@ -9,7 +9,12 @@ import { useToolShortcuts } from "./shortcuts";
 import { useStore } from "./store";
 import { detectEmbed, looksLikeImageUrl, looksLikeUrl } from "./embeds";
 import { fileToDataUrl } from "./io";
-import type { ItemDraft } from "./types";
+import type { Item, ItemDraft } from "./types";
+
+// Magic number used to identify clipboard payloads written by crboard, so a
+// crboard paste isn't confused with arbitrary JSON the user might copy from
+// elsewhere.
+const CR_CLIPBOARD_TAG = "crboard/v1";
 
 const App = () => {
   const { state, dispatch } = useStore();
@@ -19,6 +24,54 @@ const App = () => {
   const worldCenter = () => ({
     x: (window.innerWidth / 2 - state.board.view.x) / state.board.view.zoom,
     y: (window.innerHeight / 2 - state.board.view.y) / state.board.view.zoom,
+  });
+
+  // Copy / cut: serialize selected items as a tagged JSON blob and write to the
+  // system clipboard. We store the items keeping their absolute positions so
+  // paste can re-center them on the current viewport.
+  useEffect(() => {
+    const inEditable = (t: EventTarget | null): boolean => {
+      const el = t as HTMLElement | null;
+      return Boolean(
+        el?.isContentEditable ||
+          el?.tagName === "INPUT" ||
+          el?.tagName === "TEXTAREA",
+      );
+    };
+
+    const onCopy = (e: ClipboardEvent) => {
+      if (inEditable(e.target)) return;
+      if (state.selection.size === 0) return;
+      const items = state.board.items.filter((it) =>
+        state.selection.has(it.id),
+      );
+      e.clipboardData?.setData(
+        "text/plain",
+        JSON.stringify({ tag: CR_CLIPBOARD_TAG, items }),
+      );
+      e.preventDefault();
+    };
+
+    const onCut = (e: ClipboardEvent) => {
+      if (inEditable(e.target)) return;
+      if (state.selection.size === 0) return;
+      const items = state.board.items.filter((it) =>
+        state.selection.has(it.id),
+      );
+      e.clipboardData?.setData(
+        "text/plain",
+        JSON.stringify({ tag: CR_CLIPBOARD_TAG, items }),
+      );
+      e.preventDefault();
+      dispatch({ type: "removeItems", ids: [...state.selection] });
+    };
+
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("cut", onCut);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("cut", onCut);
+    };
   });
 
   // Paste handler: image data → image item, URL → embed/link/image, plain text → text.
@@ -31,6 +84,56 @@ const App = () => {
 
       const cd = e.clipboardData;
       if (!cd) return;
+
+      // 0. crboard items? Detect the tagged JSON payload and add copies
+      //    centered on the current viewport. Stripped of id/z so the reducer
+      //    assigns fresh ones.
+      const text0 = cd.getData("text/plain");
+      if (text0) {
+        try {
+          const parsed = JSON.parse(text0);
+          if (
+            parsed &&
+            parsed.tag === CR_CLIPBOARD_TAG &&
+            Array.isArray(parsed.items) &&
+            parsed.items.length > 0
+          ) {
+            e.preventDefault();
+            const items = parsed.items as Item[];
+            // Translate the bbox of pasted items so it lands centered on the viewport.
+            let minX = Infinity,
+              minY = Infinity,
+              maxX = -Infinity,
+              maxY = -Infinity;
+            for (const it of items) {
+              if (it.x < minX) minX = it.x;
+              if (it.y < minY) minY = it.y;
+              if (it.x + it.w > maxX) maxX = it.x + it.w;
+              if (it.y + it.h > maxY) maxY = it.y + it.h;
+            }
+            const cx = (minX + maxX) / 2;
+            const cy = (minY + maxY) / 2;
+            const c = worldCenter();
+            const dx = c.x - cx;
+            const dy = c.y - cy;
+            const drafts: ItemDraft[] = items.map((it) => {
+              // Strip id/z; reducer regenerates them on add.
+              const stripped: Record<string, unknown> = { ...it };
+              delete stripped.id;
+              delete stripped.z;
+              return {
+                ...(stripped as ItemDraft),
+                x: it.x + dx,
+                y: it.y + dy,
+              } as ItemDraft;
+            });
+            dispatch({ type: "addItems", items: drafts });
+            return;
+          }
+        } catch {
+          // Not JSON — fall through to the regular paste paths below.
+        }
+      }
 
       // 1. Image file in clipboard?
       for (const item of Array.from(cd.items)) {

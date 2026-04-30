@@ -270,11 +270,15 @@ export const ItemView = ({
         !editing &&
         !suppressIndividualHandles && (
           <>
-            {(["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[]).map(
-              (p) => (
-                <Handle key={p} pos={p} onPointerDown={startResize(p)} />
-              ),
-            )}
+            {/* Text items only show left/right edge handles. Height is always
+                content-driven (auto-grow), so exposing top/bottom handles just
+                fights with the auto-grow effect and creates flicker. */}
+            {(item.type === "text"
+              ? (["l", "r"] as HandlePos[])
+              : (["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[])
+            ).map((p) => (
+              <Handle key={p} pos={p} onPointerDown={startResize(p)} />
+            ))}
           </>
         )}
     </div>

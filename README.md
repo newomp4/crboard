@@ -40,9 +40,11 @@ Then open the printed URL (usually http://localhost:5173).
 | `⇧⌘Z` or `⌘Y` | Redo |
 | `⌘D` | Duplicate selection |
 | `⌘A` | Select all |
+| `⌘C` / `⌘X` / `⌘V` | Copy / cut / paste selected items |
 | `⌘]` / `⌘[` | Bring forward / send backward |
 | `⌘0` | Reset zoom to 100% |
 | `⌘1` | Fit all content in view |
+| `⌘J` | Zoom to selection |
 | Arrow keys | Nudge 1px (`⇧`+arrow = 10px) |
 | `Backspace` / `Delete` | Delete selection |
 | `Esc` | Deselect |

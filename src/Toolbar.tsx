@@ -412,12 +412,13 @@ const hasSelectedText = (state: State) =>
   );
 
 // Text size presets. Each click writes fontSize + fontWeight on every selected
-// text item (other selected items are unaffected).
+// text item (other selected items are unaffected). The ramp roughly doubles at
+// each step so "Title" reads as a real headline next to "Body".
 const TEXT_PRESETS: { label: string; size: number; weight: number }[] = [
-  { label: "Small", size: 12, weight: 400 },
-  { label: "Body", size: 16, weight: 400 },
-  { label: "Heading", size: 22, weight: 600 },
-  { label: "Title", size: 32, weight: 700 },
+  { label: "Small", size: 13, weight: 400 },
+  { label: "Body", size: 18, weight: 400 },
+  { label: "Heading", size: 36, weight: 700 },
+  { label: "Title", size: 64, weight: 800 },
 ];
 
 const TextOptions = ({
@@ -726,8 +727,10 @@ const HelpOverlay = ({ onClose }: { onClose: () => void }) => {
     [`${isMac ? "⇧⌘Z" : "Ctrl+Shift+Z"}`, "Redo"],
     [`${mod}D`, "Duplicate"],
     [`${mod}A`, "Select all"],
+    [`${mod}C / ${mod}X / ${mod}V`, "Copy / cut / paste items"],
     [`${mod}] / ${mod}[`, "Bring forward / send back"],
     [`${mod}0 / ${mod}1`, "Reset zoom / fit content"],
+    [`${mod}J`, "Zoom to selection"],
     ["Arrows", "Nudge 1px (Shift = 10px)"],
     ["Backspace", "Delete selection"],
     ["Esc", "Deselect"],

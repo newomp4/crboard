@@ -4,7 +4,7 @@
 // All math is done in WORLD coordinates. Mouse deltas come in as screen pixels
 // and we divide by the current zoom to get world units.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Item, View } from "./types";
 import type { Action } from "./store";
 import { detectEmbed } from "./embeds";
@@ -210,6 +210,9 @@ export const ItemView = ({
         }
         onContextMenu?.(item.id, e.clientX, e.clientY);
       }}
+      // Belt-and-suspenders: even with draggable=false on every <a>/<img>, some
+      // browsers still try to start a drag on the wrapper itself. Eat the event.
+      onDragStart={(e) => e.preventDefault()}
       style={{
         position: "absolute",
         left: item.x,
@@ -218,7 +221,7 @@ export const ItemView = ({
         height: item.h,
         zIndex: item.z,
       }}
-      className={selected ? "selection-ring" : ""}
+      className={`crboard-item${selected ? " selection-ring" : ""}`}
     >
       <ItemBody
         item={item}
@@ -342,38 +345,19 @@ const ItemBody = ({
     case "embed":
       return <EmbedBody item={item} selected={selected} />;
     case "link":
-      return (
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "center",
-            width: "100%",
-            height: "100%",
-            padding: 16,
-            background: "var(--surface-2)",
-            border: "1px solid var(--border)",
-            color: "var(--text)",
-            textDecoration: "none",
-            fontSize: 14,
-            wordBreak: "break-word",
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>
-            {item.title || new URL(item.url).hostname}
-          </div>
-          <div style={{ color: "var(--text-3)", fontSize: 12 }}>{item.url}</div>
-        </a>
-      );
+      return <LinkBody item={item} selected={selected} />;
     case "drawing":
       return <DrawingBody item={item} />;
   }
 };
 
+// Text items use a real <textarea> rather than contenteditable. Reasons:
+//   - Pasting into contenteditable smuggles in HTML/styles. Textarea is plain.
+//   - Native textarea behavior (Enter, Tab, IME composition) is just better.
+//   - Auto-grow is a one-line trick on textarea (set height = scrollHeight).
+//
+// We let the height of the *item* track the content. The user can still set a
+// width via the left/right edge handles; the height fits the text.
 const TextBody = ({
   item,
   editing,
@@ -385,50 +369,206 @@ const TextBody = ({
   setEditing: (v: boolean) => void;
   dispatch: React.Dispatch<Action>;
 }) => {
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow: every time the text or width changes, recompute height to fit.
+  // We measure on the textarea itself by setting height:auto and reading
+  // scrollHeight, then update the item if it's drifted.
+  useLayoutEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const measured = Math.max(40, ta.scrollHeight);
+    if (Math.abs(measured - item.h) > 0.5) {
+      dispatch({
+        type: "updateItem",
+        id: item.id,
+        patch: { h: measured } as Partial<Item>,
+      });
+    }
+  }, [item.text, item.w, item.fontSize, item.h, item.id, dispatch]);
+
+  // Drop into editing → focus + place caret at end.
   useEffect(() => {
     if (editing && ref.current) {
-      ref.current.focus();
-      // Place caret at the end.
-      const r = document.createRange();
-      r.selectNodeContents(ref.current);
-      r.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(r);
+      const ta = ref.current;
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
     }
   }, [editing]);
 
   return (
-    <div
+    <textarea
       ref={ref}
-      contentEditable={editing}
-      suppressContentEditableWarning
-      onBlur={(e) => {
-        setEditing(false);
+      value={item.text}
+      readOnly={!editing}
+      placeholder={editing ? "Type…" : ""}
+      spellCheck={editing}
+      onChange={(e) =>
         dispatch({
           type: "updateItem",
           id: item.id,
-          patch: { text: e.currentTarget.innerText },
-        });
+          patch: { text: e.target.value } as Partial<Item>,
+        })
+      }
+      onBlur={() => setEditing(false)}
+      // While editing, don't propagate pointer events so the wrapper's drag
+      // handler doesn't interfere with text selection inside the field.
+      onPointerDown={(e) => {
+        if (editing) e.stopPropagation();
       }}
-      onPointerDown={(e) => editing && e.stopPropagation()}
+      onKeyDown={(e) => {
+        // Esc / Cmd+Enter both commit and exit edit mode.
+        if (
+          e.key === "Escape" ||
+          ((e.metaKey || e.ctrlKey) && e.key === "Enter")
+        ) {
+          e.preventDefault();
+          ref.current?.blur();
+        }
+      }}
       style={{
+        // Width fills the item; height is driven by scrollHeight measurement.
         width: "100%",
         height: "100%",
         padding: 12,
+        margin: 0,
         fontSize: item.fontSize,
         lineHeight: 1.4,
+        fontFamily: "inherit",
         color: "var(--text)",
         background: "var(--surface-2)",
         border: "1px solid var(--border)",
-        outline: editing ? "none" : undefined,
+        outline: "none",
+        resize: "none",
+        // pre-wrap-equivalent for textareas — wraps long lines, preserves \n.
         whiteSpace: "pre-wrap",
-        overflow: "auto",
+        wordBreak: "break-word",
+        overflow: "hidden",
         cursor: editing ? "text" : "default",
+        // Keep the textarea visually inert when not editing.
+        pointerEvents: editing ? "auto" : "none",
+        boxSizing: "border-box",
+        display: "block",
+      }}
+    />
+  );
+};
+
+// Link cards mirror the embed pattern: visible source-link footer, click-to-focus
+// overlay so first click selects (rather than navigating away). Once selected,
+// click anywhere in the card to open. The native <a draggable=false> means the
+// browser's "drag link out" gesture stops fighting our move handler.
+const LinkBody = ({
+  item,
+  selected,
+}: {
+  item: Extract<Item, { type: "link" }>;
+  selected: boolean;
+}) => {
+  let host = item.url;
+  let path = "";
+  try {
+    const u = new URL(item.url);
+    host = u.hostname.replace(/^www\./, "");
+    path = u.pathname + u.search;
+  } catch {
+    /* keep raw url as title */
+  }
+  const title = item.title || host;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        width: "100%",
+        height: "100%",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
+        overflow: "hidden",
       }}
     >
-      {item.text}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: 4,
+          fontSize: 14,
+        }}
+      >
+        <div
+          style={{
+            fontWeight: 600,
+            color: "var(--text)",
+            wordBreak: "break-word",
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            color: "var(--text-3)",
+            fontSize: 12,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={item.url}
+        >
+          {host}
+          {path && path !== "/" ? path : ""}
+        </div>
+      </div>
+      <a
+        href={item.url}
+        target="_blank"
+        rel="noreferrer"
+        draggable={false}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        title={item.url}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 10px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--surface)",
+          fontSize: 11,
+          color: "var(--text-2)",
+          textDecoration: "none",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          Open original
+        </span>
+        <ExternalIcon />
+      </a>
+      {!selected && (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            cursor: "pointer",
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -512,6 +652,7 @@ const SourceLinkFooter = ({ url }: { url: string }) => {
       href={url}
       target="_blank"
       rel="noreferrer"
+      draggable={false}
       // Don't let clicks/drags here trigger item selection or move.
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}

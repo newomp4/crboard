@@ -166,6 +166,17 @@ export const Canvas = ({ state, dispatch }: Props) => {
         return;
       }
 
+      // Enter on a single selected text item drops into edit mode.
+      if (e.key === "Enter" && !e.shiftKey && !mod && selection.size === 1) {
+        const id = [...selection][0];
+        const it = state.board.items.find((i) => i.id === id);
+        if (it && it.type === "text") {
+          e.preventDefault();
+          dispatch({ type: "setEditId", id });
+          return;
+        }
+      }
+
       if (e.key === "Escape") {
         dispatch({ type: "clearSelection" });
         dispatch({ type: "setTool", tool: "select" });

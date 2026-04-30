@@ -2,7 +2,7 @@
 // global paste/drop handlers (so you can drag-drop an image file or paste a
 // URL anywhere).
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
@@ -130,14 +130,32 @@ const App = () => {
     return () => window.removeEventListener("paste", onPaste);
   });
 
-  // Drag/drop image files onto the canvas.
+  // Drag/drop image files onto the canvas + show a "drop here" overlay while
+  // files are dragged from the OS.
+  const [dragging, setDragging] = useState(false);
   useEffect(() => {
+    // dragover fires repeatedly during a drag; use a small counter to track
+    // whether we're inside a file-drag at all (browsers send dragenter/leave
+    // pairs that flicker as you cross child elements, so we count them).
+    let depth = 0;
+    const isFileDrag = (e: DragEvent) =>
+      !!e.dataTransfer && e.dataTransfer.types.includes("Files");
+    const onEnter = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      depth++;
+      setDragging(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        e.preventDefault();
-      }
+      if (isFileDrag(e)) e.preventDefault();
     };
     const onDrop = async (e: DragEvent) => {
+      depth = 0;
+      setDragging(false);
       const files = e.dataTransfer?.files;
       if (!files || !files.length) return;
       e.preventDefault();
@@ -169,9 +187,13 @@ const App = () => {
       y: (sy - state.board.view.y) / state.board.view.zoom,
     });
 
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragleave", onLeave);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
     return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragleave", onLeave);
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("drop", onDrop);
     };
@@ -182,6 +204,11 @@ const App = () => {
       <Canvas state={state} dispatch={dispatch} />
       <Toolbar state={state} dispatch={dispatch} />
       {state.board.items.length === 0 && <EmptyHint />}
+      {dragging && (
+        <div className="drop-overlay">
+          <span>Drop image to add to board</span>
+        </div>
+      )}
     </div>
   );
 };

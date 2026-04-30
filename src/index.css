@@ -106,3 +106,61 @@ textarea {
   outline: 2px solid var(--selection);
   outline-offset: 2px;
 }
+
+/*
+  Browsers treat <a> and <img> as draggable by default — clicking and pulling
+  on a link inside a card kicks off a "drag-link-out" gesture instead of moving
+  the card. We disable native drag at the CSS layer (and also via draggable=false
+  on the elements themselves) so item-drag always wins.
+*/
+a,
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/*
+  When the canvas is in select mode and the user hovers an unselected item,
+  a faint outline tells them it's interactive. The :not() avoids stacking on top
+  of the .selection-ring outline already drawn for the selected state.
+*/
+.crboard-item:not(.selection-ring):hover {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+/*
+  Items shouldn't accidentally start a text selection when the user click-drags
+  to move them. Inside the editable textarea we re-enable selection.
+*/
+.crboard-item {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.crboard-item textarea,
+.crboard-item [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Visible "drop here" overlay shown while files are dragged from the OS. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1800;
+  pointer-events: none;
+  border: 2px dashed var(--selection);
+  background: var(--overlay-tint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.drop-overlay span {
+  background: var(--surface);
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+}

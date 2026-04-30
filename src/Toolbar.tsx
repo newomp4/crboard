@@ -235,6 +235,10 @@ export const Toolbar = ({ state, dispatch }: Props) => {
         </div>
       </div>
 
+      {tool === "pen" && (
+        <PenOptions pen={state.pen} dispatch={dispatch} />
+      )}
+
       <div
         style={{
           position: "fixed",
@@ -285,6 +289,97 @@ export const Toolbar = ({ state, dispatch }: Props) => {
     </>
   );
 };
+
+// Floating panel that appears above the toolbar when the pen tool is active.
+// Monochrome: four shades from black through light gray, plus three width
+// presets. Active option gets an outlined ring.
+const PEN_COLORS = ["#0a0a0a", "#525252", "#a3a3a3", "#d4d4d4"] as const;
+const PEN_WIDTHS = [1.5, 3, 6] as const;
+
+const PenOptions = ({
+  pen,
+  dispatch,
+}: {
+  pen: { color: string; width: number };
+  dispatch: React.Dispatch<Action>;
+}) => (
+  <div
+    style={{
+      position: "fixed",
+      bottom: 64,
+      left: "50%",
+      transform: "translateX(-50%)",
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "6px 10px",
+      background: "rgba(255,255,255,0.92)",
+      border: "1px solid #e5e5e5",
+      backdropFilter: "blur(8px)",
+      zIndex: 1000,
+    }}
+  >
+    {PEN_COLORS.map((c) => {
+      const active = pen.color === c;
+      return (
+        <button
+          key={c}
+          onClick={() => dispatch({ type: "setPen", patch: { color: c } })}
+          aria-label={`Pen color ${c}`}
+          title={c}
+          style={{
+            width: 22,
+            height: 22,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <span
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: "50%",
+              background: c,
+              border: "1px solid #e5e5e5",
+              boxShadow: active ? "0 0 0 2px #0a0a0a" : "none",
+            }}
+          />
+        </button>
+      );
+    })}
+    <div style={{ width: 1, height: 18, background: "#e5e5e5", margin: "0 2px" }} />
+    {PEN_WIDTHS.map((w) => {
+      const active = Math.abs(pen.width - w) < 0.01;
+      return (
+        <button
+          key={w}
+          onClick={() => dispatch({ type: "setPen", patch: { width: w } })}
+          aria-label={`Pen width ${w}`}
+          title={`${w}px`}
+          style={{
+            width: 26,
+            height: 22,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: active ? "#0a0a0a" : "transparent",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              width: 16,
+              height: w,
+              borderRadius: w,
+              background: active ? "#ffffff" : pen.color,
+            }}
+          />
+        </button>
+      );
+    })}
+  </div>
+);
 
 const ZoomLabel = ({ zoom }: { zoom: number }) => (
   <div

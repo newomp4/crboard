@@ -17,6 +17,11 @@ import { emptyBoard } from "./types";
 const STORAGE_KEY = "crboard:current";
 const HISTORY_CAP = 100;
 
+export type PenStyle = {
+  color: string;
+  width: number;
+};
+
 export type State = {
   board: Board;
   past: Board[];
@@ -27,22 +32,27 @@ export type State = {
   // created via the text tool — they should be ready to type into without a
   // double-click).
   editId: string | null;
+  pen: PenStyle;
 };
 
 export type Action =
   | { type: "addItem"; item: ItemDraft; edit?: boolean }
   | { type: "addItems"; items: ItemDraft[] }
   | { type: "updateItem"; id: string; patch: Partial<Item> }
+  | { type: "setItemPositions"; positions: { id: string; x: number; y: number }[] }
   | { type: "removeItems"; ids: string[] }
   | { type: "duplicateItems"; ids: string[]; offset?: { x: number; y: number } }
   | { type: "nudgeItems"; ids: string[]; dx: number; dy: number }
   | { type: "selectOnly"; ids: string[] }
+  | { type: "selectAdd"; ids: string[] }
   | { type: "selectToggle"; id: string }
   | { type: "clearSelection" }
   | { type: "setTool"; tool: Tool }
   | { type: "setView"; view: View }
   | { type: "setName"; name: string }
   | { type: "bringToFront"; id: string }
+  | { type: "sendToBack"; id: string }
+  | { type: "setPen"; patch: Partial<PenStyle> }
   | { type: "loadBoard"; board: Board }
   | { type: "newBoard" }
   | { type: "commitHistory" } // snapshot current board for an upcoming drag
@@ -109,6 +119,20 @@ const apply = (state: State, action: Action): State => {
         }),
       };
     }
+    case "setItemPositions": {
+      const map = new Map(action.positions.map((p) => [p.id, p]));
+      if (map.size === 0) return state;
+      return {
+        ...state,
+        board: touch({
+          ...state.board,
+          items: state.board.items.map((it) => {
+            const p = map.get(it.id);
+            return p ? { ...it, x: p.x, y: p.y } : it;
+          }),
+        }),
+      };
+    }
     case "removeItems": {
       const ids = new Set(action.ids);
       return {
@@ -160,6 +184,11 @@ const apply = (state: State, action: Action): State => {
     }
     case "selectOnly":
       return { ...state, selection: new Set(action.ids) };
+    case "selectAdd": {
+      const next = new Set(state.selection);
+      for (const id of action.ids) next.add(id);
+      return { ...state, selection: next };
+    }
     case "selectToggle": {
       const next = new Set(state.selection);
       if (next.has(action.id)) next.delete(action.id);
@@ -186,6 +215,24 @@ const apply = (state: State, action: Action): State => {
         }),
       };
     }
+    case "sendToBack": {
+      const minZ = state.board.items.reduce(
+        (m, it) => Math.min(m, it.z),
+        Infinity,
+      );
+      const z = (Number.isFinite(minZ) ? minZ : 0) - 1;
+      return {
+        ...state,
+        board: touch({
+          ...state.board,
+          items: state.board.items.map((it) =>
+            it.id === action.id ? { ...it, z } : it,
+          ),
+        }),
+      };
+    }
+    case "setPen":
+      return { ...state, pen: { ...state.pen, ...action.patch } };
     case "loadBoard":
       return {
         ...state,
@@ -258,6 +305,7 @@ const loadInitial = (): State => {
     selection: new Set(),
     tool: "select",
     editId: null,
+    pen: { color: "#0a0a0a", width: 2 },
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);

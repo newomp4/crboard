@@ -15,6 +15,10 @@ type Props = {
   autoEdit?: boolean;
   view: View;
   tool: "select" | "text" | "pen";
+  // Needed for multi-drag: the drag handler captures origin positions of
+  // every selected item at gesture start so they all move together.
+  allItems: Item[];
+  selectedIds: string[];
   dispatch: React.Dispatch<Action>;
 };
 
@@ -26,6 +30,8 @@ export const ItemView = ({
   autoEdit,
   view,
   tool,
+  allItems,
+  selectedIds,
   dispatch,
 }: Props) => {
   const ref = useRef<HTMLDivElement>(null);
@@ -48,24 +54,35 @@ export const ItemView = ({
       e.stopPropagation();
       (e.target as Element).setPointerCapture?.(e.pointerId);
 
-      // Select on mousedown (additive with shift).
-      if (!selected) {
-        dispatch(
-          e.shiftKey
-            ? { type: "selectToggle", id: item.id }
-            : { type: "selectOnly", ids: [item.id] },
-        );
+      // Shift-click toggles selection without dragging. Otherwise figure out
+      // which items the gesture should drag together.
+      if (e.shiftKey) {
+        dispatch({ type: "selectToggle", id: item.id });
+        return;
+      }
+
+      let dragIds: string[];
+      if (selected) {
+        // Drag whole current selection.
+        dragIds = selectedIds.length > 0 ? selectedIds : [item.id];
+      } else {
+        // Replace selection with just this item, then drag it.
+        dispatch({ type: "selectOnly", ids: [item.id] });
+        dragIds = [item.id];
       }
       dispatch({ type: "bringToFront", id: item.id });
 
-      // Snapshot pre-drag state for undo. We record once per gesture so the
-      // drag is one history step, not hundreds.
-      let committed = false;
+      // Capture origin positions so each move event computes absolute
+      // positions from the gesture start (avoids accumulating rounding error).
+      const origins = new Map<string, { x: number; y: number }>();
+      for (const id of dragIds) {
+        const it = allItems.find((i) => i.id === id);
+        if (it) origins.set(id, { x: it.x, y: it.y });
+      }
 
+      let committed = false;
       const startX = e.clientX;
       const startY = e.clientY;
-      const origX = item.x;
-      const origY = item.y;
 
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / view.zoom;
@@ -75,11 +92,11 @@ export const ItemView = ({
           dispatch({ type: "commitHistory" });
           committed = true;
         }
-        dispatch({
-          type: "updateItem",
-          id: item.id,
-          patch: { x: origX + dx, y: origY + dy } as Partial<Item>,
+        const positions = dragIds.flatMap((id) => {
+          const o = origins.get(id);
+          return o ? [{ id, x: o.x + dx, y: o.y + dy }] : [];
         });
+        dispatch({ type: "setItemPositions", positions });
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
@@ -88,7 +105,7 @@ export const ItemView = ({
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    [tool, editing, selected, item, view.zoom, dispatch],
+    [tool, editing, selected, item, selectedIds, allItems, view.zoom, dispatch],
   );
 
   const startResize = useCallback(
@@ -103,6 +120,12 @@ export const ItemView = ({
       const startY = e.clientY;
       const orig = { x: item.x, y: item.y, w: item.w, h: item.h };
 
+      // Aspect ratio is locked by default for images and embeds (stretching
+      // either looks bad — Instagram has a fixed ratio, photos shouldn't
+      // squish). For other types it's free unless the user holds shift.
+      const lockByDefault = item.type === "image" || item.type === "embed";
+      const aspect = orig.w / orig.h;
+
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / view.zoom;
         const dy = (ev.clientY - startY) / view.zoom;
@@ -111,24 +134,34 @@ export const ItemView = ({
           dispatch({ type: "commitHistory" });
           committed = true;
         }
+
+        // Shift inverts the lock-by-default behavior.
+        const locked = ev.shiftKey ? !lockByDefault : lockByDefault;
+
         let { x, y, w, h } = orig;
-        if (corner === "br") {
-          w = Math.max(40, orig.w + dx);
-          h = Math.max(40, orig.h + dy);
-        } else if (corner === "bl") {
-          w = Math.max(40, orig.w - dx);
-          h = Math.max(40, orig.h + dy);
-          x = orig.x + (orig.w - w);
-        } else if (corner === "tr") {
-          w = Math.max(40, orig.w + dx);
-          h = Math.max(40, orig.h - dy);
-          y = orig.y + (orig.h - h);
-        } else {
-          w = Math.max(40, orig.w - dx);
-          h = Math.max(40, orig.h - dy);
-          x = orig.x + (orig.w - w);
-          y = orig.y + (orig.h - h);
+        // Compute the unconstrained dimensions for this corner.
+        const signX = corner.includes("l") ? -1 : 1;
+        const signY = corner.includes("t") ? -1 : 1;
+        let nw = Math.max(40, orig.w + dx * signX);
+        let nh = Math.max(40, orig.h + dy * signY);
+
+        if (locked) {
+          // Pick whichever dimension changed more (in proportional terms) and
+          // derive the other from the original aspect ratio.
+          const ratioW = nw / orig.w;
+          const ratioH = nh / orig.h;
+          if (Math.abs(ratioW - 1) > Math.abs(ratioH - 1)) {
+            nh = nw / aspect;
+          } else {
+            nw = nh * aspect;
+          }
         }
+
+        w = nw;
+        h = nh;
+        if (corner.includes("l")) x = orig.x + (orig.w - w);
+        if (corner.includes("t")) y = orig.y + (orig.h - h);
+
         dispatch({
           type: "updateItem",
           id: item.id,

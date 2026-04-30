@@ -36,10 +36,15 @@ Then open the printed URL (usually http://localhost:5173).
 | `⇧⌘Z` or `⌘Y` | Redo |
 | `⌘D` | Duplicate selection |
 | `⌘A` | Select all |
+| `⌘]` / `⌘[` | Bring forward / send backward |
+| `⌘0` | Reset zoom to 100% |
+| `⌘1` | Fit all content in view |
 | Arrow keys | Nudge 1px (`⇧`+arrow = 10px) |
 | `Backspace` / `Delete` | Delete selection |
 | `Esc` | Deselect |
 | Hold `Space` + drag | Pan from any tool |
+| Drag empty canvas | Rubber-band selection (`⇧` extends) |
+| Resize image (or embed) | Aspect ratio is locked by default — hold `⇧` to free-resize |
 
 Boards autosave to your browser. **File → Save as `.crboard`** keeps a
 portable JSON copy on disk.

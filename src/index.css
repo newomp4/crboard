@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #ffffff;
+  color: #0a0a0a;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Subtle dotted background for the canvas — helps users feel motion when panning */
+.dot-grid {
+  background-image: radial-gradient(
+    circle,
+    #d4d4d4 1px,
+    transparent 1px
+  );
+}
+
+/* Hide scrollbars on the world surface */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* Selection ring — a single accent we allow because it must be visible against monochrome content */
+.selection-ring {
+  outline: 2px solid #0a0a0a;
+  outline-offset: 2px;
+}

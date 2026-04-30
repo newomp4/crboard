@@ -8,6 +8,8 @@
 // (file picker / URL prompt), not a persistent canvas mode.
 export type Tool = "select" | "text" | "pen";
 
+export type Theme = "light" | "dark";
+
 export type View = {
   x: number; // pixel offset of the world origin from the top-left of the viewport
   y: number;

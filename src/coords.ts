@@ -38,3 +38,33 @@ export const zoomAt = (
 };
 
 export const clampZoom = (z: number) => Math.min(8, Math.max(0.1, z));
+
+// Zoom around the centre of the viewport. Used by +/- zoom buttons.
+export const zoomCenter = (view: View, vw: number, vh: number, factor: number) =>
+  zoomAt(view, { x: vw / 2, y: vh / 2 }, clampZoom(view.zoom * factor));
+
+// Compute a view that frames every item with reasonable padding.
+export const fitToBounds = (
+  items: { x: number; y: number; w: number; h: number }[],
+  vw: number,
+  vh: number,
+): View => {
+  if (items.length === 0) return { x: 0, y: 0, zoom: 1 };
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const it of items) {
+    if (it.x < minX) minX = it.x;
+    if (it.y < minY) minY = it.y;
+    if (it.x + it.w > maxX) maxX = it.x + it.w;
+    if (it.y + it.h > maxY) maxY = it.y + it.h;
+  }
+  const pad = 80;
+  const w = maxX - minX + pad * 2;
+  const h = maxY - minY + pad * 2;
+  const zoom = clampZoom(Math.min(vw / w, vh / h));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  return { zoom, x: vw / 2 - cx * zoom, y: vh / 2 - cy * zoom };
+};

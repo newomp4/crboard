@@ -9,7 +9,7 @@
 // The recipient double-clicks the file → opens in any browser → can pan,
 // zoom, watch embeds. No editor, no toolbar, view-only.
 
-import type { Board } from "./types";
+import type { Board, Theme } from "./types";
 
 const escapeHtml = (s: string) =>
   s
@@ -24,51 +24,60 @@ const escapeHtml = (s: string) =>
 const safeJson = (v: unknown) =>
   JSON.stringify(v).replace(/<\/(script)/gi, "<\\/$1");
 
-export const exportToHtml = (board: Board): string => {
+export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
   const title = escapeHtml(board.name || "crboard");
   const data = safeJson(board);
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="${theme}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>${title}</title>
 <style>
-  html,body{height:100%;margin:0;background:#fafafa;color:#0a0a0a;
+  :root{--bg:#fafafa;--surface:#fff;--surface-2:#fff;--border:#e5e5e5;
+    --text:#0a0a0a;--text-2:#525252;--text-3:#737373;--grid-dot:#d4d4d4;
+    --chrome-bg:rgba(255,255,255,.85)}
+  [data-theme="dark"]{--bg:#0a0a0a;--surface:#171717;--surface-2:#1f1f1f;
+    --border:#262626;--text:#fafafa;--text-2:#d4d4d4;--text-3:#a3a3a3;
+    --grid-dot:#262626;--chrome-bg:rgba(23,23,23,.85);color-scheme:dark}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
     font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Inter,sans-serif;
     -webkit-font-smoothing:antialiased;overflow:hidden}
   *{box-sizing:border-box}
   #viewport{position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab}
   #viewport.grabbing{cursor:grabbing}
   #grid{position:absolute;inset:0;pointer-events:none;opacity:.6;
-    background-image:radial-gradient(circle,#d4d4d4 1px,transparent 1px)}
+    background-image:radial-gradient(circle,var(--grid-dot) 1px,transparent 1px)}
   #world{position:absolute;left:0;top:0;transform-origin:0 0;width:0;height:0}
   .item{position:absolute}
-  .item.text{padding:12px;line-height:1.4;background:#fff;border:1px solid #e5e5e5;
+  .item.text{padding:12px;line-height:1.4;background:var(--surface-2);
+    border:1px solid var(--border);color:var(--text);
     white-space:pre-wrap;overflow:auto}
-  .item.image img{width:100%;height:100%;object-fit:contain;display:block;background:#fafafa}
-  .item.embed{display:flex;flex-direction:column;background:#fafafa;border:1px solid #e5e5e5;overflow:hidden}
+  .item.image img{width:100%;height:100%;object-fit:contain;display:block;background:var(--bg)}
+  .item.embed{display:flex;flex-direction:column;background:var(--bg);
+    border:1px solid var(--border);overflow:hidden}
   .item.embed .frame-wrap{flex:1;position:relative;min-height:0}
-  .item.embed iframe{width:100%;height:100%;border:0;background:#fafafa;display:block}
+  .item.embed iframe{width:100%;height:100%;border:0;background:var(--bg);display:block}
   .item.embed .src-link{display:flex;align-items:center;gap:6px;padding:6px 10px;
-    border-top:1px solid #e5e5e5;background:#fff;font-size:11px;color:#525252;
+    border-top:1px solid var(--border);background:var(--surface-2);
+    font-size:11px;color:var(--text-2);
     text-decoration:none;flex-shrink:0}
   .item.embed .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .item.embed .src-link b{color:#0a0a0a;font-weight:500}
+  .item.embed .src-link b{color:var(--text);font-weight:500}
   .item.link{display:flex;flex-direction:column;justify-content:center;padding:16px;
-    background:#fff;border:1px solid #e5e5e5;text-decoration:none;color:#0a0a0a;font-size:14px;
-    word-break:break-word}
+    background:var(--surface-2);border:1px solid var(--border);
+    text-decoration:none;color:var(--text);font-size:14px;word-break:break-word}
   .item.link b{display:block;margin-bottom:4px;font-weight:600}
-  .item.link span{color:#737373;font-size:12px}
+  .item.link span{color:var(--text-3);font-size:12px}
   .item.drawing svg{display:block;overflow:visible;pointer-events:none}
-  #hint{position:fixed;left:12px;bottom:12px;font-size:11px;color:#737373;
-    background:rgba(255,255,255,.85);padding:6px 10px;border:1px solid #e5e5e5;
+  #hint{position:fixed;left:12px;bottom:12px;font-size:11px;color:var(--text-3);
+    background:var(--chrome-bg);padding:6px 10px;border:1px solid var(--border);
     pointer-events:none;letter-spacing:.01em}
-  #title{position:fixed;left:12px;top:12px;font-size:13px;font-weight:600;color:#0a0a0a;
-    background:rgba(255,255,255,.85);padding:6px 10px;border:1px solid #e5e5e5;pointer-events:none}
-  #zoom{position:fixed;right:12px;bottom:12px;font-size:11px;color:#737373;
-    background:rgba(255,255,255,.85);padding:6px 10px;border:1px solid #e5e5e5;
+  #title{position:fixed;left:12px;top:12px;font-size:13px;font-weight:600;color:var(--text);
+    background:var(--chrome-bg);padding:6px 10px;border:1px solid var(--border);pointer-events:none}
+  #zoom{position:fixed;right:12px;bottom:12px;font-size:11px;color:var(--text-3);
+    background:var(--chrome-bg);padding:6px 10px;border:1px solid var(--border);
     font-variant-numeric:tabular-nums;pointer-events:none}
 </style>
 </head>
@@ -228,8 +237,8 @@ const VIEWER_JS = `
 })();
 `;
 
-export const downloadHtml = (board: Board) => {
-  const html = exportToHtml(board);
+export const downloadHtml = (board: Board, theme: Theme = "light") => {
+  const html = exportToHtml(board, theme);
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

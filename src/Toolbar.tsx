@@ -9,6 +9,7 @@ import type { ItemDraft } from "./types";
 import { detectEmbed, looksLikeImageUrl } from "./embeds";
 import { fileToDataUrl, openBoardFile, saveBoardFile } from "./io";
 import { downloadHtml } from "./export";
+import { clampZoom, fitToBounds, zoomCenter } from "./coords";
 
 type Props = {
   state: State;
@@ -142,8 +143,8 @@ export const Toolbar = ({ state, dispatch }: Props) => {
           display: "flex",
           alignItems: "center",
           padding: "0 12px",
-          background: "rgba(255,255,255,0.92)",
-          borderBottom: "1px solid #e5e5e5",
+          background: "var(--chrome-bg)",
+          borderBottom: "1px solid var(--border)",
           backdropFilter: "blur(8px)",
           zIndex: 1000,
           gap: 12,
@@ -152,7 +153,7 @@ export const Toolbar = ({ state, dispatch }: Props) => {
         <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.04em" }}>
           crboard
         </div>
-        <div style={{ width: 1, height: 18, background: "#e5e5e5" }} />
+        <div style={{ width: 1, height: 18, background: "var(--border)" }} />
         <input
           value={board.name}
           onChange={(e) =>
@@ -170,7 +171,9 @@ export const Toolbar = ({ state, dispatch }: Props) => {
         />
         <div style={{ flex: 1 }} />
 
-        <ZoomLabel zoom={board.view.zoom} />
+        <HelpButton />
+
+        <ThemeToggle theme={state.theme} dispatch={dispatch} />
 
         <div style={{ position: "relative" }} ref={menuRef}>
           <BarButton onClick={() => setMenuOpen((m) => !m)} active={menuOpen}>
@@ -184,9 +187,9 @@ export const Toolbar = ({ state, dispatch }: Props) => {
                 right: 0,
                 marginTop: 6,
                 minWidth: 200,
-                background: "#fff",
-                border: "1px solid #e5e5e5",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.06)",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                boxShadow: "var(--shadow)",
                 padding: 4,
                 zIndex: 1001,
               }}
@@ -224,7 +227,7 @@ export const Toolbar = ({ state, dispatch }: Props) => {
               <Sep />
               <MenuItem
                 onClick={() => {
-                  downloadHtml(board);
+                  downloadHtml(board, state.theme);
                   setMenuOpen(false);
                 }}
               >
@@ -236,7 +239,7 @@ export const Toolbar = ({ state, dispatch }: Props) => {
       </div>
 
       {tool === "pen" && (
-        <PenOptions pen={state.pen} dispatch={dispatch} />
+        <PenOptions pen={state.pen} theme={state.theme} dispatch={dispatch} />
       )}
 
       <div
@@ -248,8 +251,8 @@ export const Toolbar = ({ state, dispatch }: Props) => {
           display: "flex",
           gap: 4,
           padding: 4,
-          background: "rgba(255,255,255,0.92)",
-          border: "1px solid #e5e5e5",
+          background: "var(--chrome-bg)",
+          border: "1px solid var(--border)",
           backdropFilter: "blur(8px)",
           zIndex: 1000,
         }}
@@ -286,23 +289,36 @@ export const Toolbar = ({ state, dispatch }: Props) => {
           <LinkIcon />
         </ToolButton>
       </div>
+
+      <ZoomControls
+        zoom={board.view.zoom}
+        items={board.items}
+        view={board.view}
+        dispatch={dispatch}
+      />
     </>
   );
 };
 
 // Floating panel that appears above the toolbar when the pen tool is active.
-// Monochrome: four shades from black through light gray, plus three width
-// presets. Active option gets an outlined ring.
-const PEN_COLORS = ["#0a0a0a", "#525252", "#a3a3a3", "#d4d4d4"] as const;
+// Palette flips by theme: light canvas gets 4 shades from black; dark canvas
+// gets 4 shades from white. The "primary" stroke (first swatch) always reads
+// against the canvas background.
+const PEN_LIGHT = ["#0a0a0a", "#525252", "#a3a3a3", "#d4d4d4"] as const;
+const PEN_DARK = ["#fafafa", "#a3a3a3", "#525252", "#404040"] as const;
 const PEN_WIDTHS = [1.5, 3, 6] as const;
 
 const PenOptions = ({
   pen,
+  theme,
   dispatch,
 }: {
   pen: { color: string; width: number };
+  theme: "light" | "dark";
   dispatch: React.Dispatch<Action>;
-}) => (
+}) => {
+  const palette = theme === "dark" ? PEN_DARK : PEN_LIGHT;
+  return (
   <div
     style={{
       position: "fixed",
@@ -313,13 +329,13 @@ const PenOptions = ({
       alignItems: "center",
       gap: 6,
       padding: "6px 10px",
-      background: "rgba(255,255,255,0.92)",
-      border: "1px solid #e5e5e5",
+      background: "var(--chrome-bg)",
+      border: "1px solid var(--border)",
       backdropFilter: "blur(8px)",
       zIndex: 1000,
     }}
   >
-    {PEN_COLORS.map((c) => {
+    {palette.map((c) => {
       const active = pen.color === c;
       return (
         <button
@@ -341,14 +357,16 @@ const PenOptions = ({
               height: 14,
               borderRadius: "50%",
               background: c,
-              border: "1px solid #e5e5e5",
-              boxShadow: active ? "0 0 0 2px #0a0a0a" : "none",
+              border: "1px solid var(--border)",
+              boxShadow: active
+                ? "0 0 0 2px var(--surface), 0 0 0 4px var(--selection)"
+                : "none",
             }}
           />
         </button>
       );
     })}
-    <div style={{ width: 1, height: 18, background: "#e5e5e5", margin: "0 2px" }} />
+    <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 2px" }} />
     {PEN_WIDTHS.map((w) => {
       const active = Math.abs(pen.width - w) < 0.01;
       return (
@@ -363,7 +381,7 @@ const PenOptions = ({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: active ? "#0a0a0a" : "transparent",
+            background: active ? "var(--text)" : "transparent",
           }}
         >
           <span
@@ -372,27 +390,313 @@ const PenOptions = ({
               width: 16,
               height: w,
               borderRadius: w,
-              background: active ? "#ffffff" : pen.color,
+              background: active ? "var(--bg)" : pen.color,
             }}
           />
         </button>
       );
     })}
   </div>
+  );
+};
+
+const ThemeToggle = ({
+  theme,
+  dispatch,
+}: {
+  theme: "light" | "dark";
+  dispatch: React.Dispatch<Action>;
+}) => (
+  <button
+    onClick={() =>
+      dispatch({ type: "setTheme", theme: theme === "dark" ? "light" : "dark" })
+    }
+    aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+    title={`${theme === "dark" ? "Light" : "Dark"} mode`}
+    style={{
+      width: 28,
+      height: 28,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "var(--text-2)",
+      border: "1px solid var(--border)",
+      background: "var(--surface)",
+    }}
+    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
+    onMouseLeave={(e) => (e.currentTarget.style.background = "var(--surface)")}
+  >
+    {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+  </button>
 );
 
-const ZoomLabel = ({ zoom }: { zoom: number }) => (
-  <div
-    style={{
-      fontVariantNumeric: "tabular-nums",
-      fontSize: 12,
-      color: "#737373",
-      padding: "0 8px",
-    }}
+const SunIcon = () => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
   >
-    {Math.round(zoom * 100)}%
-  </div>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+  </svg>
 );
+
+const MoonIcon = () => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
+    <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z" />
+  </svg>
+);
+
+// Bottom-right zoom controls. The middle "100%" button doubles as fit-to-content
+// (clicking it frames every item in the viewport).
+const ZoomControls = ({
+  zoom,
+  items,
+  view,
+  dispatch,
+}: {
+  zoom: number;
+  items: { x: number; y: number; w: number; h: number }[];
+  view: { x: number; y: number; zoom: number };
+  dispatch: React.Dispatch<Action>;
+}) => {
+  const stepZoom = (factor: number) => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    dispatch({ type: "setView", view: zoomCenter(view, vw, vh, factor) });
+  };
+  const fit = () => {
+    if (items.length === 0) {
+      dispatch({ type: "setView", view: { x: 0, y: 0, zoom: 1 } });
+      return;
+    }
+    dispatch({
+      type: "setView",
+      view: fitToBounds(items, window.innerWidth, window.innerHeight),
+    });
+  };
+  return (
+    <div
+      style={{
+        position: "fixed",
+        right: 12,
+        bottom: 16,
+        display: "flex",
+        alignItems: "center",
+        background: "var(--chrome-bg)",
+        border: "1px solid var(--border)",
+        backdropFilter: "blur(8px)",
+        zIndex: 1000,
+      }}
+    >
+      <ChromeBtn onClick={() => stepZoom(0.8)} title="Zoom out">
+        −
+      </ChromeBtn>
+      <button
+        onClick={fit}
+        title="Fit to content (⌘1)"
+        style={{
+          width: 56,
+          height: 28,
+          fontSize: 11,
+          color: "var(--text-2)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        {Math.round(clampZoom(zoom) * 100)}%
+      </button>
+      <ChromeBtn onClick={() => stepZoom(1.25)} title="Zoom in">
+        +
+      </ChromeBtn>
+    </div>
+  );
+};
+
+const ChromeBtn = ({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  title?: string;
+  children: React.ReactNode;
+}) => (
+  <button
+    onClick={onClick}
+    title={title}
+    style={{
+      width: 28,
+      height: 28,
+      fontSize: 14,
+      color: "var(--text-2)",
+      lineHeight: 1,
+    }}
+    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
+    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+  >
+    {children}
+  </button>
+);
+
+// "?" button + on-demand shortcuts overlay. Click outside / Escape closes.
+// Pressing "?" anywhere also toggles it.
+const HelpButton = () => {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t?.isContentEditable ||
+        t?.tagName === "INPUT" ||
+        t?.tagName === "TEXTAREA"
+      )
+        return;
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Keyboard shortcuts (?)"
+        aria-label="Keyboard shortcuts"
+        style={{
+          width: 28,
+          height: 28,
+          fontSize: 13,
+          color: "var(--text-2)",
+          border: "1px solid var(--border)",
+          background: "var(--surface)",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "var(--surface)")}
+      >
+        ?
+      </button>
+      {open && <HelpOverlay onClose={() => setOpen(false)} />}
+    </>
+  );
+};
+
+const HelpOverlay = ({ onClose }: { onClose: () => void }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const isMac = navigator.platform.toLowerCase().includes("mac");
+  const mod = isMac ? "⌘" : "Ctrl+";
+
+  const rows: [string, string][] = [
+    ["V / T / P", "Select / Text / Pen"],
+    [`${mod}Z`, "Undo"],
+    [`${isMac ? "⇧⌘Z" : "Ctrl+Shift+Z"}`, "Redo"],
+    [`${mod}D`, "Duplicate"],
+    [`${mod}A`, "Select all"],
+    [`${mod}] / ${mod}[`, "Bring forward / send back"],
+    [`${mod}0 / ${mod}1`, "Reset zoom / fit content"],
+    ["Arrows", "Nudge 1px (Shift = 10px)"],
+    ["Backspace", "Delete selection"],
+    ["Esc", "Deselect"],
+    ["Space + drag", "Pan (any tool)"],
+    ["Drag empty canvas", "Rubber-band select (Shift extends)"],
+    ["Right-click item", "Context menu"],
+    ["Hold Shift on resize", "Toggle aspect-ratio lock"],
+    ["?", "Show this help"],
+  ];
+
+  return (
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.3)",
+        zIndex: 1500,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          boxShadow: "var(--shadow)",
+          padding: 20,
+          minWidth: 340,
+          maxWidth: 420,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Keyboard shortcuts</div>
+          <button
+            onClick={onClose}
+            style={{ color: "var(--text-3)", fontSize: 18, lineHeight: 1, padding: 4 }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <tbody>
+            {rows.map(([k, v]) => (
+              <tr key={k}>
+                <td
+                  style={{
+                    padding: "4px 12px 4px 0",
+                    color: "var(--text-2)",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    whiteSpace: "nowrap",
+                    verticalAlign: "top",
+                  }}
+                >
+                  {k}
+                </td>
+                <td style={{ padding: "4px 0", color: "var(--text)" }}>{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
 const BarButton = ({
   children,
@@ -409,9 +713,9 @@ const BarButton = ({
       padding: "6px 12px",
       fontSize: 12,
       fontWeight: 500,
-      border: "1px solid #e5e5e5",
-      background: active ? "#0a0a0a" : "#ffffff",
-      color: active ? "#ffffff" : "#0a0a0a",
+      border: "1px solid var(--border)",
+      background: active ? "var(--text)" : "var(--surface)",
+      color: active ? "var(--bg)" : "var(--text)",
     }}
   >
     {children}
@@ -434,7 +738,7 @@ const MenuItem = ({
       padding: "8px 10px",
       fontSize: 13,
     }}
-    onMouseEnter={(e) => (e.currentTarget.style.background = "#f5f5f5")}
+    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
   >
     {children}
@@ -442,11 +746,11 @@ const MenuItem = ({
 );
 
 const Sep = () => (
-  <div style={{ height: 1, background: "#e5e5e5", margin: "4px 0" }} />
+  <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
 );
 
 const Divider = () => (
-  <div style={{ width: 1, background: "#e5e5e5", margin: "4px 2px" }} />
+  <div style={{ width: 1, background: "var(--border)", margin: "4px 2px" }} />
 );
 
 const ToolButton = ({
@@ -472,11 +776,11 @@ const ToolButton = ({
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      background: active ? "#0a0a0a" : "transparent",
-      color: active ? "#ffffff" : "#0a0a0a",
+      background: active ? "var(--text)" : "transparent",
+      color: active ? "var(--bg)" : "var(--text)",
     }}
     onMouseEnter={(e) => {
-      if (!active) e.currentTarget.style.background = "#f5f5f5";
+      if (!active) e.currentTarget.style.background = "var(--hover)";
     }}
     onMouseLeave={(e) => {
       if (!active) e.currentTarget.style.background = "transparent";

@@ -19,6 +19,8 @@ type Props = {
   // every selected item at gesture start so they all move together.
   allItems: Item[];
   selectedIds: string[];
+  // Right-click handler. Canvas opens a small action menu at (clientX, clientY).
+  onContextMenu?: (itemId: string, clientX: number, clientY: number) => void;
   dispatch: React.Dispatch<Action>;
 };
 
@@ -32,6 +34,7 @@ export const ItemView = ({
   tool,
   allItems,
   selectedIds,
+  onContextMenu,
   dispatch,
 }: Props) => {
   const ref = useRef<HTMLDivElement>(null);
@@ -109,7 +112,7 @@ export const ItemView = ({
   );
 
   const startResize = useCallback(
-    (corner: "tl" | "tr" | "bl" | "br") => (e: React.PointerEvent) => {
+    (handle: HandlePos) => (e: React.PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
       (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -122,9 +125,16 @@ export const ItemView = ({
 
       // Aspect ratio is locked by default for images and embeds (stretching
       // either looks bad — Instagram has a fixed ratio, photos shouldn't
-      // squish). For other types it's free unless the user holds shift.
+      // squish). Shift inverts the default.
       const lockByDefault = item.type === "image" || item.type === "embed";
       const aspect = orig.w / orig.h;
+
+      // Decompose handle into anchors. The handle is the side(s) being
+      // pulled; the *opposite* side stays fixed.
+      const left = handle.includes("l");
+      const right = handle.includes("r");
+      const top = handle.includes("t");
+      const bottom = handle.includes("b");
 
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / view.zoom;
@@ -135,37 +145,42 @@ export const ItemView = ({
           committed = true;
         }
 
-        // Shift inverts the lock-by-default behavior.
         const locked = ev.shiftKey ? !lockByDefault : lockByDefault;
 
-        let { x, y, w, h } = orig;
-        // Compute the unconstrained dimensions for this corner.
-        const signX = corner.includes("l") ? -1 : 1;
-        const signY = corner.includes("t") ? -1 : 1;
-        let nw = Math.max(40, orig.w + dx * signX);
-        let nh = Math.max(40, orig.h + dy * signY);
+        // First compute unconstrained new dims based on which side is being pulled.
+        let nw = orig.w;
+        let nh = orig.h;
+        if (left) nw = orig.w - dx;
+        else if (right) nw = orig.w + dx;
+        if (top) nh = orig.h - dy;
+        else if (bottom) nh = orig.h + dy;
+        nw = Math.max(40, nw);
+        nh = Math.max(40, nh);
 
         if (locked) {
-          // Pick whichever dimension changed more (in proportional terms) and
-          // derive the other from the original aspect ratio.
-          const ratioW = nw / orig.w;
-          const ratioH = nh / orig.h;
-          if (Math.abs(ratioW - 1) > Math.abs(ratioH - 1)) {
+          const cornerHandle = (left || right) && (top || bottom);
+          if (cornerHandle) {
+            // Pick whichever dim changed more proportionally, derive the other.
+            const rW = nw / orig.w;
+            const rH = nh / orig.h;
+            if (Math.abs(rW - 1) >= Math.abs(rH - 1)) nh = nw / aspect;
+            else nw = nh * aspect;
+          } else if (left || right) {
             nh = nw / aspect;
           } else {
             nw = nh * aspect;
           }
         }
 
-        w = nw;
-        h = nh;
-        if (corner.includes("l")) x = orig.x + (orig.w - w);
-        if (corner.includes("t")) y = orig.y + (orig.h - h);
+        let nx = orig.x;
+        let ny = orig.y;
+        if (left) nx = orig.x + (orig.w - nw);
+        if (top) ny = orig.y + (orig.h - nh);
 
         dispatch({
           type: "updateItem",
           id: item.id,
-          patch: { x, y, w, h } as Partial<Item>,
+          patch: { x: nx, y: ny, w: nw, h: nh } as Partial<Item>,
         });
       };
       const onUp = () => {
@@ -186,6 +201,15 @@ export const ItemView = ({
       onDoubleClick={() => {
         if (item.type === "text") setEditing(true);
       }}
+      onContextMenu={(e) => {
+        if (editing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!selected) {
+          dispatch({ type: "selectOnly", ids: [item.id] });
+        }
+        onContextMenu?.(item.id, e.clientX, e.clientY);
+      }}
       style={{
         position: "absolute",
         left: item.x,
@@ -204,39 +228,75 @@ export const ItemView = ({
         dispatch={dispatch}
       />
 
-      {selected && tool === "select" && (
+      {selected && tool === "select" && !editing && (
         <>
-          <Handle pos="tl" onPointerDown={startResize("tl")} />
-          <Handle pos="tr" onPointerDown={startResize("tr")} />
-          <Handle pos="bl" onPointerDown={startResize("bl")} />
-          <Handle pos="br" onPointerDown={startResize("br")} />
+          {(["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[]).map(
+            (p) => (
+              <Handle key={p} pos={p} onPointerDown={startResize(p)} />
+            ),
+          )}
         </>
       )}
     </div>
   );
 };
 
+type HandlePos = "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r";
+
+// Resize handle. 8 of them total: 4 corners + 4 edges. Edges resize one
+// dimension only (text width without changing height, etc.). Corner cursors
+// are diagonal, edge cursors are straight.
 const Handle = ({
   pos,
   onPointerDown,
 }: {
-  pos: "tl" | "tr" | "bl" | "br";
+  pos: HandlePos;
   onPointerDown: (e: React.PointerEvent) => void;
 }) => {
-  const cursor =
-    pos === "tl" || pos === "br" ? "nwse-resize" : "nesw-resize";
+  const cornerCursors = {
+    tl: "nwse-resize",
+    br: "nwse-resize",
+    tr: "nesw-resize",
+    bl: "nesw-resize",
+    t: "ns-resize",
+    b: "ns-resize",
+    l: "ew-resize",
+    r: "ew-resize",
+  } as const;
+
+  const isCorner = pos.length === 2;
+  const offset = -HANDLE_SIZE / 2 - 2;
+
   const style: React.CSSProperties = {
     position: "absolute",
     width: HANDLE_SIZE,
     height: HANDLE_SIZE,
-    background: "#ffffff",
-    border: "1.5px solid #0a0a0a",
-    cursor,
+    background: "var(--surface-2)",
+    border: "1.5px solid var(--selection)",
+    cursor: cornerCursors[pos],
+    // touchAction:none keeps the browser from intercepting pointer events on touch devices.
+    touchAction: "none",
   };
-  if (pos.includes("t")) style.top = -HANDLE_SIZE / 2 - 2;
-  else style.bottom = -HANDLE_SIZE / 2 - 2;
-  if (pos.includes("l")) style.left = -HANDLE_SIZE / 2 - 2;
-  else style.right = -HANDLE_SIZE / 2 - 2;
+
+  // Anchor each handle. Edge handles centre on their side using transform.
+  if (isCorner) {
+    if (pos.includes("t")) style.top = offset;
+    else style.bottom = offset;
+    if (pos.includes("l")) style.left = offset;
+    else style.right = offset;
+  } else {
+    if (pos === "t" || pos === "b") {
+      style.left = "50%";
+      style.transform = "translateX(-50%)";
+      if (pos === "t") style.top = offset;
+      else style.bottom = offset;
+    } else {
+      style.top = "50%";
+      style.transform = "translateY(-50%)";
+      if (pos === "l") style.left = offset;
+      else style.right = offset;
+    }
+  }
   return <div style={style} onPointerDown={onPointerDown} />;
 };
 
@@ -275,7 +335,7 @@ const ItemBody = ({
             objectFit: "contain",
             userSelect: "none",
             display: "block",
-            background: "#fafafa",
+            background: "var(--bg)",
           }}
         />
       );
@@ -295,9 +355,9 @@ const ItemBody = ({
             width: "100%",
             height: "100%",
             padding: 16,
-            background: "#ffffff",
-            border: "1px solid #e5e5e5",
-            color: "#0a0a0a",
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            color: "var(--text)",
             textDecoration: "none",
             fontSize: 14,
             wordBreak: "break-word",
@@ -306,7 +366,7 @@ const ItemBody = ({
           <div style={{ fontWeight: 600, marginBottom: 4 }}>
             {item.title || new URL(item.url).hostname}
           </div>
-          <div style={{ color: "#737373", fontSize: 12 }}>{item.url}</div>
+          <div style={{ color: "var(--text-3)", fontSize: 12 }}>{item.url}</div>
         </a>
       );
     case "drawing":
@@ -359,9 +419,9 @@ const TextBody = ({
         padding: 12,
         fontSize: item.fontSize,
         lineHeight: 1.4,
-        color: "#0a0a0a",
-        background: "#ffffff",
-        border: "1px solid #e5e5e5",
+        color: "var(--text)",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
         outline: editing ? "none" : undefined,
         whiteSpace: "pre-wrap",
         overflow: "auto",
@@ -398,8 +458,8 @@ const EmbedBody = ({
         flexDirection: "column",
         width: "100%",
         height: "100%",
-        background: "#fafafa",
-        border: "1px solid #e5e5e5",
+        background: "var(--bg)",
+        border: "1px solid var(--border)",
         overflow: "hidden",
       }}
     >
@@ -410,7 +470,7 @@ const EmbedBody = ({
             width: "100%",
             height: "100%",
             border: 0,
-            background: "#fafafa",
+            background: "var(--bg)",
             display: "block",
           }}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
@@ -461,10 +521,10 @@ const SourceLinkFooter = ({ url }: { url: string }) => {
         alignItems: "center",
         gap: 6,
         padding: "6px 10px",
-        borderTop: "1px solid #e5e5e5",
-        background: "#ffffff",
+        borderTop: "1px solid var(--border)",
+        background: "var(--surface-2)",
         fontSize: 11,
-        color: "#525252",
+        color: "var(--text-2)",
         textDecoration: "none",
         flexShrink: 0,
       }}
@@ -478,7 +538,7 @@ const SourceLinkFooter = ({ url }: { url: string }) => {
           textOverflow: "ellipsis",
         }}
       >
-        <span style={{ color: "#0a0a0a", fontWeight: 500 }}>{host}</span>
+        <span style={{ color: "var(--text)", fontWeight: 500 }}>{host}</span>
         {path && path !== "/" ? <span>{path}</span> : null}
       </span>
       <ExternalIcon />

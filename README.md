@@ -26,6 +26,10 @@ Then open the printed URL (usually http://localhost:5173).
 - **Draw**: pick the pen tool (P), drag.
 - **Move / resize**: select an item with V (or just click), drag to move, drag corners to resize.
 - **Click an embed once to select it** (the iframe is dim-locked while unselected so the wrapper can capture the click); click again — or click anywhere inside it after selection — to interact with the embedded page.
+- **Right-click any item** for a context menu: bring to front / send to back / duplicate / open original / copy URL / delete.
+- **Dark mode** — toggle with the moon/sun button in the top bar (persists across sessions; respects your OS preference on first run). The pen palette flips so the default stroke contrasts with the canvas. Exported `.html` files bake in whichever theme you chose.
+- **Zoom controls** are bottom-right (− / 100% / +). Click "100%" to fit all content in the viewport.
+- **Keyboard shortcuts** — press `?` (or click the `?` in the top bar) for the full list.
 
 ### Shortcuts
 
@@ -45,6 +49,8 @@ Then open the printed URL (usually http://localhost:5173).
 | Hold `Space` + drag | Pan from any tool |
 | Drag empty canvas | Rubber-band selection (`⇧` extends) |
 | Resize image (or embed) | Aspect ratio is locked by default — hold `⇧` to free-resize |
+| `?` | Open shortcuts overlay |
+| Right-click an item | Context menu |
 
 Boards autosave to your browser. **File → Save as `.crboard`** keeps a
 portable JSON copy on disk.

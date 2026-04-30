@@ -2,8 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Theme tokens. We swap them via data-theme="dark" on the <html> element. All
+  components read these via inline style {{ background: 'var(--bg)' }} so a
+  theme switch propagates instantly with no per-component logic.
+*/
 :root {
   color-scheme: light;
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --hover: #f5f5f5;
+  --border: #e5e5e5;
+  --border-strong: #d4d4d4;
+  --text: #0a0a0a;
+  --text-2: #525252;
+  --text-3: #737373;
+  --text-faint: #a3a3a3;
+  --selection: #0a0a0a;
+  --grid-dot: #d4d4d4;
+  --pen-default: #0a0a0a;
+  --overlay-tint: rgba(10, 10, 10, 0.06);
+  --chrome-bg: rgba(255, 255, 255, 0.92);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --surface: #171717;
+  --surface-2: #1f1f1f;
+  --hover: #262626;
+  --border: #262626;
+  --border-strong: #404040;
+  --text: #fafafa;
+  --text-2: #d4d4d4;
+  --text-3: #a3a3a3;
+  --text-faint: #737373;
+  --selection: #fafafa;
+  --grid-dot: #262626;
+  --pen-default: #fafafa;
+  --overlay-tint: rgba(250, 250, 250, 0.08);
+  --chrome-bg: rgba(23, 23, 23, 0.92);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 html,
@@ -11,12 +52,14 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #ffffff;
-  color: #0a0a0a;
+  background: var(--bg);
+  color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Keep the system focus ring out of the way of our custom selection chrome. */
+  caret-color: var(--text);
 }
 
 * {
@@ -38,16 +81,15 @@ textarea {
   color: inherit;
 }
 
-/* Subtle dotted background for the canvas — helps users feel motion when panning */
+/* Subtle dotted background for the canvas — helps users feel motion when panning. */
 .dot-grid {
   background-image: radial-gradient(
     circle,
-    #d4d4d4 1px,
+    var(--grid-dot) 1px,
     transparent 1px
   );
 }
 
-/* Hide scrollbars on the world surface */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -55,8 +97,12 @@ textarea {
   scrollbar-width: none;
 }
 
-/* Selection ring — a single accent we allow because it must be visible against monochrome content */
+/*
+  Selection chrome. We rely on outline (paints outside the box) plus 8 handles
+  rendered in JS. The outline color follows the theme so it stays visible
+  whether the canvas is bright or dark.
+*/
 .selection-ring {
-  outline: 2px solid #0a0a0a;
+  outline: 2px solid var(--selection);
   outline-offset: 2px;
 }

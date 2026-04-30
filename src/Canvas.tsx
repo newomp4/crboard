@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Action, State } from "./store";
 import type { Item, ItemDraft, Stroke } from "./types";
 import { ItemView } from "./Item";
-import { clampZoom, screenToWorld, zoomAt } from "./coords";
+import { clampZoom, fitToBounds, screenToWorld, zoomAt } from "./coords";
 import { smoothPathD, thinPoints } from "./smooth";
 
 type Props = {
@@ -27,6 +27,12 @@ export const Canvas = ({ state, dispatch }: Props) => {
   const [spaceDown, setSpaceDown] = useState(false);
   const [panning, setPanning] = useState(false);
   const [marquee, setMarquee] = useState<Rect | null>(null);
+  // Right-click context menu, anchored at screen coords.
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    itemId: string;
+  } | null>(null);
 
   // In-progress drawing stroke. Stored separately from the board so we don't
   // reduce on every mousemove — only when the stroke ends.
@@ -131,7 +137,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
         const r = el.getBoundingClientRect();
         dispatch({
           type: "setView",
-          view: fitView(state.board.items, r.width, r.height),
+          view: fitToBounds(state.board.items, r.width, r.height),
         });
         return;
       }
@@ -389,7 +395,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
         position: "absolute",
         inset: 0,
         overflow: "hidden",
-        background: "#fafafa",
+        background: "var(--bg)",
         cursor,
         touchAction: "none",
       }}
@@ -429,6 +435,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
             tool={tool}
             allItems={board.items}
             selectedIds={selectedIds}
+            onContextMenu={(itemId, x, y) => setCtxMenu({ itemId, x, y })}
             dispatch={dispatch}
           />
         ))}
@@ -466,15 +473,163 @@ export const Canvas = ({ state, dispatch }: Props) => {
             top: marquee.y,
             width: marquee.w,
             height: marquee.h,
-            border: "1px solid #0a0a0a",
-            background: "rgba(10,10,10,0.06)",
+            border: "1px solid var(--selection)",
+            background: "var(--overlay-tint)",
             pointerEvents: "none",
           }}
+        />
+      )}
+
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          item={state.board.items.find((it) => it.id === ctxMenu.itemId)}
+          dispatch={dispatch}
+          close={() => setCtxMenu(null)}
         />
       )}
     </div>
   );
 };
+
+// ---------- context menu ----------
+
+const ContextMenu = ({
+  x,
+  y,
+  item,
+  dispatch,
+  close,
+}: {
+  x: number;
+  y: number;
+  item: Item | undefined;
+  dispatch: React.Dispatch<Action>;
+  close: () => void;
+}) => {
+  // Close on outside click or escape.
+  useEffect(() => {
+    const onDown = () => close();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    // Defer attaching the click listener so the right-click that opened the
+    // menu doesn't immediately close it.
+    const t = setTimeout(() => {
+      window.addEventListener("mousedown", onDown);
+      window.addEventListener("keydown", onKey);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [close]);
+
+  if (!item) return null;
+
+  const linky =
+    item.type === "embed" || item.type === "link" ? item.url : null;
+
+  const run = (fn: () => void) => () => {
+    fn();
+    close();
+  };
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        left: x,
+        top: y,
+        minWidth: 180,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        boxShadow: "var(--shadow)",
+        padding: 4,
+        zIndex: 2000,
+        fontSize: 13,
+      }}
+    >
+      <CtxItem onClick={run(() => dispatch({ type: "bringToFront", id: item.id }))} kbd="⌘]">
+        Bring to front
+      </CtxItem>
+      <CtxItem onClick={run(() => dispatch({ type: "sendToBack", id: item.id }))} kbd="⌘[">
+        Send to back
+      </CtxItem>
+      <CtxSep />
+      <CtxItem
+        onClick={run(() => dispatch({ type: "duplicateItems", ids: [item.id] }))}
+        kbd="⌘D"
+      >
+        Duplicate
+      </CtxItem>
+      {linky && (
+        <>
+          <CtxSep />
+          <CtxItem
+            onClick={run(() => {
+              window.open(linky, "_blank", "noreferrer");
+            })}
+          >
+            Open original
+          </CtxItem>
+          <CtxItem
+            onClick={run(() => {
+              void navigator.clipboard?.writeText(linky);
+            })}
+          >
+            Copy URL
+          </CtxItem>
+        </>
+      )}
+      <CtxSep />
+      <CtxItem
+        onClick={run(() => dispatch({ type: "removeItems", ids: [item.id] }))}
+        kbd="⌫"
+      >
+        Delete
+      </CtxItem>
+    </div>
+  );
+};
+
+const CtxItem = ({
+  children,
+  onClick,
+  kbd,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  kbd?: string;
+}) => (
+  <button
+    onClick={onClick}
+    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
+    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    style={{
+      display: "flex",
+      alignItems: "center",
+      width: "100%",
+      padding: "6px 10px",
+      textAlign: "left",
+      gap: 16,
+    }}
+  >
+    <span style={{ flex: 1 }}>{children}</span>
+    {kbd && (
+      <span style={{ color: "var(--text-3)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+        {kbd}
+      </span>
+    )}
+  </button>
+);
+
+const CtxSep = () => (
+  <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+);
 
 const rectsIntersect = (
   a: { x: number; y: number; w: number; h: number },
@@ -486,25 +641,3 @@ const rectsIntersect = (
     a.y + a.h < b.y ||
     b.y + b.h < a.y
   );
-
-// Compute a view that frames every item with reasonable padding.
-const fitView = (items: Item[], vw: number, vh: number) => {
-  let minX = Infinity,
-    minY = Infinity,
-    maxX = -Infinity,
-    maxY = -Infinity;
-  for (const it of items) {
-    if (it.x < minX) minX = it.x;
-    if (it.y < minY) minY = it.y;
-    if (it.x + it.w > maxX) maxX = it.x + it.w;
-    if (it.y + it.h > maxY) maxY = it.y + it.h;
-  }
-  const pad = 80;
-  const w = maxX - minX + pad * 2;
-  const h = maxY - minY + pad * 2;
-  const zoom = clampZoom(Math.min(vw / w, vh / h));
-  // Center the bbox in the viewport.
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  return { zoom, x: vw / 2 - cx * zoom, y: vh / 2 - cy * zoom };
-};

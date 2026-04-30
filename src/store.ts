@@ -11,10 +11,11 @@
 
 import { useEffect, useMemo, useReducer } from "react";
 import { nanoid } from "nanoid";
-import type { Board, Item, ItemDraft, Tool, View } from "./types";
+import type { Board, Item, ItemDraft, Theme, Tool, View } from "./types";
 import { emptyBoard } from "./types";
 
 const STORAGE_KEY = "crboard:current";
+const THEME_KEY = "crboard:theme";
 const HISTORY_CAP = 100;
 
 export type PenStyle = {
@@ -33,6 +34,7 @@ export type State = {
   // double-click).
   editId: string | null;
   pen: PenStyle;
+  theme: Theme;
 };
 
 export type Action =
@@ -58,7 +60,8 @@ export type Action =
   | { type: "commitHistory" } // snapshot current board for an upcoming drag
   | { type: "undo" }
   | { type: "redo" }
-  | { type: "setEditId"; id: string | null };
+  | { type: "setEditId"; id: string | null }
+  | { type: "setTheme"; theme: Theme };
 
 const HISTORY_ACTIONS: ReadonlySet<Action["type"]> = new Set([
   "addItem",
@@ -247,6 +250,18 @@ const apply = (state: State, action: Action): State => {
       };
     case "setEditId":
       return { ...state, editId: action.id };
+    case "setTheme": {
+      // When switching themes, swap the pen color too if it's currently the
+      // theme-default. (User may have manually picked a custom shade — leave
+      // those alone.)
+      let pen = state.pen;
+      if (action.theme === "dark" && state.pen.color === "#0a0a0a") {
+        pen = { ...state.pen, color: "#fafafa" };
+      } else if (action.theme === "light" && state.pen.color === "#fafafa") {
+        pen = { ...state.pen, color: "#0a0a0a" };
+      }
+      return { ...state, theme: action.theme, pen };
+    }
     // History actions handled in the wrapping reducer.
     case "commitHistory":
     case "undo":
@@ -297,7 +312,25 @@ const reducer = (state: State, action: Action): State => {
   return next;
 };
 
+const loadTheme = (): Theme => {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    if (raw === "dark" || raw === "light") return raw;
+  } catch {
+    // ignore
+  }
+  // Fall back to OS preference.
+  if (
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+  return "light";
+};
+
 const loadInitial = (): State => {
+  const theme = loadTheme();
   const fresh: State = {
     board: emptyBoard(),
     past: [],
@@ -305,7 +338,8 @@ const loadInitial = (): State => {
     selection: new Set(),
     tool: "select",
     editId: null,
-    pen: { color: "#0a0a0a", width: 2 },
+    pen: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 2 },
+    theme,
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -336,6 +370,16 @@ export const useStore = () => {
     }, 250);
     return () => clearTimeout(t);
   }, [state.board]);
+
+  // Theme: persist + reflect on the <html> element so CSS variables swap.
+  useEffect(() => {
+    document.documentElement.dataset.theme = state.theme;
+    try {
+      localStorage.setItem(THEME_KEY, state.theme);
+    } catch {
+      // ignore
+    }
+  }, [state.theme]);
 
   const selectedItems = useMemo(
     () => state.board.items.filter((it) => state.selection.has(it.id)),

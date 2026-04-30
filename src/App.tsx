@@ -196,13 +196,13 @@ const EmptyHint = () => (
       alignItems: "center",
       justifyContent: "center",
       pointerEvents: "none",
-      color: "#a3a3a3",
+      color: "var(--text-faint)",
       fontSize: 13,
       letterSpacing: "0.02em",
       gap: 6,
     }}
   >
-    <div style={{ fontWeight: 600, color: "#737373" }}>Empty board</div>
+    <div style={{ fontWeight: 600, color: "var(--text-3)" }}>Empty board</div>
     <div>Paste a URL · drop an image · click a tool below</div>
   </div>
 );

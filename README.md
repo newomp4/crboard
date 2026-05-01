@@ -22,7 +22,11 @@ Then open the printed URL (usually http://localhost:5173).
 - **Zoom**: ⌘/ctrl + scroll, or pinch on a trackpad.
 - **Add text**: pick the text tool (T), click anywhere, type. Markdown formatting renders when you click away — `**bold**`, `_italic_`, `~~strike~~`, `` `code` ``, `[label](url)`, `# heading`, `- bullet`. Double-click to edit raw markdown again.
 - **Add image**: click the image button — or paste an image from your clipboard, or drag an image file onto the canvas.
-- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok / X / Vimeo / Spotify auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
+- **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok / X / Vimeo / Spotify / Reddit / Loom / CodePen auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
+- **Drag images from a webpage** straight onto the canvas — they land where you drop them.
+- **Eraser**: hold `Alt` while in pen mode and drag through drawings to delete them.
+- **Find on board**: `⌘F` opens a search bar — searches text content, link/embed URLs, image alt text. Enter cycles through matches and zooms to each.
+- **Stay-in-tool mode**: double-click any toolbar button to lock the tool; create many items in a row without re-pressing it. A small dot on the button indicates locked state. Single-click any tool to unlock.
 - **Connect items with arrows**: pick the connector tool (`C`), drag from one item to another.
 - **Draw**: pick the pen tool (P), drag.
 - **Move / resize**: select an item with V (or just click), drag to move, drag corners to resize.

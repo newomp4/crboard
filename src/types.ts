@@ -48,6 +48,9 @@ export type EmbedItem = Base & {
     | "twitter"
     | "vimeo"
     | "spotify"
+    | "reddit"
+    | "loom"
+    | "codepen"
     | "generic";
 };
 

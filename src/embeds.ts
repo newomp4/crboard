@@ -62,6 +62,33 @@ const spotifyPath = (url: URL): string | null => {
   return m ? `${m[1]}/${m[2]}` : null;
 };
 
+// Reddit post: reddit.com/r/{sub}/comments/{id}/{slug}/...
+// We use the redditmedia.com embed URL that Reddit's "Embed this post" feature
+// produces — works as a plain iframe without their widget script.
+const redditInfo = (url: URL): { sub: string; id: string; slug: string } | null => {
+  const h = url.hostname.replace(/^(?:www\.|old\.|new\.)/, "");
+  if (h !== "reddit.com") return null;
+  const m = url.pathname.match(
+    /^\/r\/([\w-]+)\/comments\/(\w+)(?:\/([\w-]*))?/,
+  );
+  if (!m) return null;
+  return { sub: m[1], id: m[2], slug: m[3] || "_" };
+};
+
+// Loom: loom.com/share/{id}
+const loomId = (url: URL): string | null => {
+  if (!url.hostname.endsWith("loom.com")) return null;
+  const m = url.pathname.match(/^\/share\/([\w-]+)/);
+  return m ? m[1] : null;
+};
+
+// CodePen: codepen.io/{user}/(pen|details|full)/{id}
+const codepenInfo = (url: URL): { user: string; id: string } | null => {
+  if (!url.hostname.endsWith("codepen.io")) return null;
+  const m = url.pathname.match(/^\/([\w-]+)\/(?:pen|details|full)\/([\w-]+)/);
+  return m ? { user: m[1], id: m[2] } : null;
+};
+
 export const detectEmbed = (input: string): EmbedInfo | null => {
   let url: URL;
   try {
@@ -131,6 +158,33 @@ export const detectEmbed = (input: string): EmbedInfo | null => {
         h: (sp.startsWith("track/") || sp.startsWith("episode/") ? 152 : 380) +
           FOOTER,
       },
+    };
+  }
+
+  const rd = redditInfo(url);
+  if (rd) {
+    return {
+      provider: "reddit",
+      embedUrl: `https://www.redditmedia.com/r/${rd.sub}/comments/${rd.id}/${rd.slug}/?ref_source=embed&ref=share&embed=true`,
+      defaultSize: { w: 480, h: 600 + FOOTER },
+    };
+  }
+
+  const loom = loomId(url);
+  if (loom) {
+    return {
+      provider: "loom",
+      embedUrl: `https://www.loom.com/embed/${loom}`,
+      defaultSize: { w: 640, h: 360 + FOOTER },
+    };
+  }
+
+  const cp = codepenInfo(url);
+  if (cp) {
+    return {
+      provider: "codepen",
+      embedUrl: `https://codepen.io/${cp.user}/embed/${cp.id}?default-tab=result`,
+      defaultSize: { w: 640, h: 400 + FOOTER },
     };
   }
 

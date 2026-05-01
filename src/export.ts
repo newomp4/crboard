@@ -191,6 +191,19 @@ const VIEWER_JS = `
       var sm=u.pathname.match(/^\\/(track|episode|album|playlist|artist|show)\\/([\\w-]+)/);
       if(sm) return 'https://open.spotify.com/embed/'+sm[1]+'/'+sm[2];
     }
+    var rh=u.hostname.replace(/^(?:www\\.|old\\.|new\\.)/,'');
+    if(rh==='reddit.com'){
+      var rm=u.pathname.match(/^\\/r\\/([\\w-]+)\\/comments\\/(\\w+)(?:\\/([\\w-]*))?/);
+      if(rm) return 'https://www.redditmedia.com/r/'+rm[1]+'/comments/'+rm[2]+'/'+(rm[3]||'_')+'/?ref_source=embed&ref=share&embed=true';
+    }
+    if(u.hostname.indexOf('loom.com')>=0){
+      var lm=u.pathname.match(/^\\/share\\/([\\w-]+)/);
+      if(lm) return 'https://www.loom.com/embed/'+lm[1];
+    }
+    if(u.hostname.indexOf('codepen.io')>=0){
+      var cm=u.pathname.match(/^\\/([\\w-]+)\\/(?:pen|details|full)\\/([\\w-]+)/);
+      if(cm) return 'https://codepen.io/'+cm[1]+'/embed/'+cm[2]+'?default-tab=result';
+    }
     return input;
   }
 

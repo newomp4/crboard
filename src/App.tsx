@@ -2,11 +2,11 @@
 // global paste/drop handlers (so you can drag-drop an image file or paste a
 // URL anywhere).
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
-import { useStore } from "./store";
+import { useStore, type Action } from "./store";
 import {
   extractAllUrls,
   extractUrlFromClipboard,
@@ -21,6 +21,7 @@ import {
   clearBackupDir,
   writeBackup,
 } from "./backup";
+import { clampZoom } from "./coords";
 import type { Item, ItemDraft } from "./types";
 
 // Magic number used to identify clipboard payloads written by crboard, so a
@@ -117,6 +118,26 @@ const App = () => {
       setLastBackupAt(null);
     },
   };
+
+  // ---- find on board ----
+  const [searchOpen, setSearchOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t?.isContentEditable ||
+        t?.tagName === "INPUT" ||
+        t?.tagName === "TEXTAREA"
+      )
+        return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // ---- bulk import ----
   // Take a list of URLs, build the right item type for each (image/embed/link),
@@ -353,8 +374,22 @@ const App = () => {
     // whether we're inside a file-drag at all (browsers send dragenter/leave
     // pairs that flicker as you cross child elements, so we count them).
     let depth = 0;
+    // We accept three flavors of drag:
+    //   1. Files dragged from the OS (Finder, etc.) — `Files` in types.
+    //   2. Images dragged FROM another browser tab — types include text/html
+    //      with an <img> tag inside.
+    //   3. URLs dragged from address bars or web pages — text/uri-list /
+    //      text/plain.
+    // For (2) and (3), we don't show the "Drop image to add to board" overlay
+    // (it'd flicker on every text drag). The drop still works.
     const isFileDrag = (e: DragEvent) =>
       !!e.dataTransfer && e.dataTransfer.types.includes("Files");
+    const isUrlDrag = (e: DragEvent) =>
+      !!e.dataTransfer &&
+      (e.dataTransfer.types.includes("text/uri-list") ||
+        e.dataTransfer.types.includes("text/html") ||
+        e.dataTransfer.types.includes("text/plain"));
+
     const onEnter = (e: DragEvent) => {
       if (!isFileDrag(e)) return;
       depth++;
@@ -366,35 +401,70 @@ const App = () => {
       if (depth === 0) setDragging(false);
     };
     const onDragOver = (e: DragEvent) => {
-      if (isFileDrag(e)) e.preventDefault();
+      if (isFileDrag(e) || isUrlDrag(e)) e.preventDefault();
     };
+
+    // Pull an image URL out of dragged HTML — covers the common "drag an image
+    // from Pinterest / a webpage / etc." case. We prefer this over the page
+    // URL because we want the image, not the page that contains it.
+    const extractDraggedImage = (dt: DataTransfer): string | null => {
+      const html = dt.getData("text/html");
+      if (!html) return null;
+      const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (m && /^https?:\/\//i.test(m[1])) return m[1];
+      return null;
+    };
+
     const onDrop = async (e: DragEvent) => {
       depth = 0;
       setDragging(false);
-      const files = e.dataTransfer?.files;
-      if (!files || !files.length) return;
-      e.preventDefault();
-      const c = worldCenterAt(e.clientX, e.clientY);
-      const items: ItemDraft[] = [];
-      let i = 0;
-      for (const f of Array.from(files)) {
-        if (!f.type.startsWith("image/")) continue;
-        const src = await fileToDataUrl(f);
-        const dims = await imgSize(src);
-        const max = 480;
-        const scale = Math.min(1, max / Math.max(dims.w, dims.h));
-        items.push({
-          type: "image",
-          src,
-          alt: f.name,
-          x: c.x - (dims.w * scale) / 2 + i * 24,
-          y: c.y - (dims.h * scale) / 2 + i * 24,
-          w: dims.w * scale,
-          h: dims.h * scale,
-        });
-        i++;
+      const dt = e.dataTransfer;
+      if (!dt) return;
+
+      // 1. OS files.
+      if (dt.files && dt.files.length > 0) {
+        e.preventDefault();
+        const c = worldCenterAt(e.clientX, e.clientY);
+        const items: ItemDraft[] = [];
+        let i = 0;
+        for (const f of Array.from(dt.files)) {
+          if (!f.type.startsWith("image/")) continue;
+          const src = await fileToDataUrl(f);
+          const dims = await imgSize(src);
+          const max = 480;
+          const scale = Math.min(1, max / Math.max(dims.w, dims.h));
+          items.push({
+            type: "image",
+            src,
+            alt: f.name,
+            x: c.x - (dims.w * scale) / 2 + i * 24,
+            y: c.y - (dims.h * scale) / 2 + i * 24,
+            w: dims.w * scale,
+            h: dims.h * scale,
+          });
+          i++;
+        }
+        if (items.length) dispatch({ type: "addItems", items });
+        return;
       }
-      if (items.length) dispatch({ type: "addItems", items });
+
+      // 2. Image dragged from a browser tab — text/html with <img>.
+      const imgUrl = extractDraggedImage(dt);
+      if (imgUrl) {
+        e.preventDefault();
+        const c = worldCenterAt(e.clientX, e.clientY);
+        dispatch({ type: "addItem", item: itemFromUrl(imgUrl, c) });
+        return;
+      }
+
+      // 3. Any URL via the standard clipboard helpers.
+      const url = extractUrlFromClipboard(dt);
+      if (url) {
+        e.preventDefault();
+        const c = worldCenterAt(e.clientX, e.clientY);
+        dispatch({ type: "addItem", item: itemFromUrl(url, c) });
+        return;
+      }
     };
 
     const worldCenterAt = (sx: number, sy: number) => ({
@@ -440,8 +510,175 @@ const App = () => {
           }}
         />
       )}
+      {searchOpen && (
+        <SearchBar
+          items={state.board.items}
+          dispatch={dispatch}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </div>
   );
+};
+
+// Floating search overlay (Cmd+F). Searches text content, link/embed URLs,
+// image alt text. Enter / Down cycles through matches and zooms+selects each
+// in turn. Esc closes.
+const SearchBar = ({
+  items,
+  dispatch,
+  onClose,
+}: {
+  items: Item[];
+  dispatch: React.Dispatch<Action>;
+  onClose: () => void;
+}) => {
+  const [query, setQuery] = useState("");
+  const [idx, setIdx] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Reset position whenever the query changes — first Enter goes to match 0.
+  useEffect(() => {
+    setIdx(-1);
+  }, [query]);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as Item[];
+    return items.filter((it) => itemMatches(it, q));
+  }, [query, items]);
+
+  const jumpTo = (m: Item) => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cx = m.x + m.w / 2;
+    const cy = m.y + m.h / 2;
+    // Cap zoom-in at 1.0 so a small item doesn't get blown up to 8x just
+    // because it fits.
+    const padded = Math.max(1, m.w + 200) || 1;
+    const paddedH = Math.max(1, m.h + 200) || 1;
+    const zoom = clampZoom(Math.min(1, Math.min(vw / padded, vh / paddedH)));
+    dispatch({
+      type: "setView",
+      view: { zoom, x: vw / 2 - cx * zoom, y: vh / 2 - cy * zoom },
+    });
+    dispatch({ type: "selectOnly", ids: [m.id] });
+  };
+
+  const cycle = (delta: number) => {
+    if (matches.length === 0) return;
+    const next =
+      ((idx + delta) % matches.length + matches.length) % matches.length;
+    setIdx(next);
+    jumpTo(matches[next]);
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 56,
+        right: 12,
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: 4,
+        background: "var(--chrome-bg)",
+        border: "1px solid var(--border)",
+        backdropFilter: "blur(8px)",
+        zIndex: 1500,
+        fontSize: 12,
+      }}
+    >
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Find on board…"
+        spellCheck={false}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            cycle(idx === -1 ? 1 : e.shiftKey ? -1 : 1);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            cycle(1);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            cycle(-1);
+          }
+        }}
+        style={{
+          width: 200,
+          padding: "4px 8px",
+          fontSize: 12,
+          color: "var(--text)",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          outline: "none",
+        }}
+      />
+      <span
+        style={{
+          minWidth: 48,
+          textAlign: "center",
+          color: "var(--text-3)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {matches.length === 0
+          ? query.trim()
+            ? "0/0"
+            : ""
+          : `${(idx >= 0 ? idx : 0) + 1}/${matches.length}`}
+      </span>
+      <button
+        onClick={() => cycle(-1)}
+        title="Previous (↑)"
+        disabled={matches.length === 0}
+        style={chromeBtnStyle}
+      >
+        ↑
+      </button>
+      <button
+        onClick={() => cycle(1)}
+        title="Next (↓)"
+        disabled={matches.length === 0}
+        style={chromeBtnStyle}
+      >
+        ↓
+      </button>
+      <button onClick={onClose} title="Close (Esc)" style={chromeBtnStyle}>
+        ×
+      </button>
+    </div>
+  );
+};
+
+const chromeBtnStyle: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  fontSize: 12,
+  color: "var(--text-2)",
+  lineHeight: 1,
+};
+
+// Returns true if the item's searchable text contains the query.
+const itemMatches = (item: Item, q: string): boolean => {
+  if (item.type === "text") return item.text.toLowerCase().includes(q);
+  if (item.type === "link")
+    return (item.url + " " + (item.title ?? "")).toLowerCase().includes(q);
+  if (item.type === "embed") return item.url.toLowerCase().includes(q);
+  if (item.type === "image")
+    return (item.alt ?? "").toLowerCase().includes(q);
+  return false;
 };
 
 // Modal for pasting/typing a list of URLs. Shows a live count of how many

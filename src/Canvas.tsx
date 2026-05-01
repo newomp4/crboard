@@ -347,11 +347,58 @@ export const Canvas = ({ state, dispatch }: Props) => {
           fontSize: 16,
         },
       });
-      dispatch({ type: "setTool", tool: "select" });
+      // Only revert to select tool when the user hasn't locked the text tool
+      // (locked = double-clicked the toolbar button to "stay in tool" mode).
+      if (!state.toolLocked) {
+        dispatch({ type: "setTool", tool: "select" });
+      }
       return;
     }
 
     if (tool === "pen") {
+      // Alt + pen = eraser: drag through drawings to delete them. Hit-tests
+      // each drawing's bbox against the cursor's world position; intersecting
+      // drawing items get removed in one undoable batch.
+      if (e.altKey) {
+        e.preventDefault();
+        (e.target as Element).setPointerCapture?.(e.pointerId);
+        let committed = false;
+        const erase = (sx: number, sy: number) => {
+          const r = containerRef.current!.getBoundingClientRect();
+          const w = screenToWorld(
+            { x: sx - r.left, y: sy - r.top },
+            board.view,
+          );
+          const ids: string[] = [];
+          for (const it of state.board.items) {
+            if (it.type !== "drawing") continue;
+            if (
+              w.x >= it.x &&
+              w.x <= it.x + it.w &&
+              w.y >= it.y &&
+              w.y <= it.y + it.h
+            ) {
+              ids.push(it.id);
+            }
+          }
+          if (ids.length === 0) return;
+          if (!committed) {
+            dispatch({ type: "commitHistory" });
+            committed = true;
+          }
+          dispatch({ type: "removeItems", ids });
+        };
+        erase(e.clientX, e.clientY);
+        const onMove = (ev: PointerEvent) => erase(ev.clientX, ev.clientY);
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        return;
+      }
+
       // Start a new stroke. We collect points in world coordinates; on release
       // we thin + smooth them and commit as a drawing item.
       (e.target as Element).setPointerCapture?.(e.pointerId);

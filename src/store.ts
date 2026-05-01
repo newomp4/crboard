@@ -29,6 +29,10 @@ export type State = {
   future: Board[];
   selection: Set<string>;
   tool: Tool;
+  // When true, finishing an action (e.g. creating a text item) leaves the
+  // current tool active instead of reverting to select. Toggled via
+  // double-clicking a tool button in the toolbar.
+  toolLocked: boolean;
   // Item id that should immediately enter edit mode (used for text items
   // created via the text tool — they should be ready to type into without a
   // double-click).
@@ -63,7 +67,7 @@ export type Action =
   | { type: "selectAdd"; ids: string[] }
   | { type: "selectToggle"; id: string }
   | { type: "clearSelection" }
-  | { type: "setTool"; tool: Tool }
+  | { type: "setTool"; tool: Tool; lock?: boolean }
   | { type: "setView"; view: View }
   | { type: "setName"; name: string }
   | { type: "bringToFront"; id: string }
@@ -268,7 +272,7 @@ const apply = (state: State, action: Action): State => {
     case "clearSelection":
       return { ...state, selection: new Set() };
     case "setTool":
-      return { ...state, tool: action.tool };
+      return { ...state, tool: action.tool, toolLocked: !!action.lock };
     case "setView":
       return { ...state, board: { ...state.board, view: action.view } };
     case "setName":
@@ -408,6 +412,7 @@ const loadInitial = (): State => {
     future: [],
     selection: new Set(),
     tool: "select",
+    toolLocked: false,
     editId: null,
     pen: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 2 },
     theme,

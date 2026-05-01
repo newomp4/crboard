@@ -279,7 +279,11 @@ export const Toolbar = ({
       >
         <ToolButton
           active={tool === "select"}
+          locked={tool === "select" && state.toolLocked}
           onClick={() => dispatch({ type: "setTool", tool: "select" })}
+          onDoubleClick={() =>
+            dispatch({ type: "setTool", tool: "select", lock: true })
+          }
           label="Select"
           shortcut="V"
         >
@@ -287,7 +291,11 @@ export const Toolbar = ({
         </ToolButton>
         <ToolButton
           active={tool === "text"}
+          locked={tool === "text" && state.toolLocked}
           onClick={() => dispatch({ type: "setTool", tool: "text" })}
+          onDoubleClick={() =>
+            dispatch({ type: "setTool", tool: "text", lock: true })
+          }
           label="Text"
           shortcut="T"
         >
@@ -295,7 +303,11 @@ export const Toolbar = ({
         </ToolButton>
         <ToolButton
           active={tool === "pen"}
+          locked={tool === "pen" && state.toolLocked}
           onClick={() => dispatch({ type: "setTool", tool: "pen" })}
+          onDoubleClick={() =>
+            dispatch({ type: "setTool", tool: "pen", lock: true })
+          }
           label="Draw"
           shortcut="P"
         >
@@ -303,7 +315,11 @@ export const Toolbar = ({
         </ToolButton>
         <ToolButton
           active={tool === "connector"}
+          locked={tool === "connector" && state.toolLocked}
           onClick={() => dispatch({ type: "setTool", tool: "connector" })}
+          onDoubleClick={() =>
+            dispatch({ type: "setTool", tool: "connector", lock: true })
+          }
           label="Connector"
           shortcut="C"
         >
@@ -802,6 +818,9 @@ const HelpOverlay = ({ onClose }: { onClose: () => void }) => {
     [`${mod}] / ${mod}[`, "Bring forward / send back"],
     [`${mod}0 / ${mod}1`, "Reset zoom / fit content"],
     [`${mod}J`, "Zoom to selection"],
+    [`${mod}F`, "Find on board"],
+    ["Alt + pen", "Eraser (drag through drawings)"],
+    ["Double-click tool", "Lock tool (stay-in-tool mode)"],
     ["Arrows", "Nudge 1px (Shift = 10px)"],
     ["Backspace", "Delete selection"],
     ["Esc", "Deselect"],
@@ -968,22 +987,32 @@ const Divider = () => (
 
 const ToolButton = ({
   active,
+  locked,
   onClick,
+  onDoubleClick,
   label,
   shortcut,
   children,
 }: {
   active?: boolean;
+  locked?: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
   label: string;
   shortcut?: string;
   children: React.ReactNode;
 }) => (
   <button
     onClick={onClick}
-    title={shortcut ? `${label} (${shortcut})` : label}
+    onDoubleClick={onDoubleClick}
+    title={
+      shortcut
+        ? `${label} (${shortcut})${onDoubleClick ? " — double-click to lock" : ""}`
+        : label
+    }
     aria-label={label}
     style={{
+      position: "relative",
       width: 36,
       height: 36,
       display: "flex",
@@ -1000,6 +1029,20 @@ const ToolButton = ({
     }}
   >
     {children}
+    {locked && (
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          right: 4,
+          bottom: 4,
+          width: 5,
+          height: 5,
+          borderRadius: "50%",
+          background: active ? "var(--bg)" : "var(--text)",
+        }}
+      />
+    )}
   </button>
 );
 

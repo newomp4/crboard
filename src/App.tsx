@@ -7,7 +7,11 @@ import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
 import { useStore } from "./store";
-import { extractUrlFromClipboard, itemFromUrl } from "./embeds";
+import {
+  extractAllUrls,
+  extractUrlFromClipboard,
+  itemFromUrl,
+} from "./embeds";
 import { fileToDataUrl } from "./io";
 import {
   backupFilename,
@@ -112,6 +116,51 @@ const App = () => {
       setBackupHandle(null);
       setLastBackupAt(null);
     },
+  };
+
+  // ---- bulk import ----
+  // Take a list of URLs, build the right item type for each (image/embed/link),
+  // shelf-pack into rows up to MAX_ROW_W wide, then translate so the bbox of
+  // all items lands centered on the current viewport.
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const bulkImport = (urls: string[]) => {
+    if (urls.length === 0) return;
+    const tiles = urls.map((u) => {
+      const d = itemFromUrl(u, { x: 0, y: 0 });
+      return { ...d, x: 0, y: 0 } as ItemDraft;
+    });
+
+    // Shelf-pack: items flow left→right, wrap to a new row when adding the
+    // next item would exceed MAX_ROW_W. Each row's height is the tallest
+    // item in it. Gives a natural newspaper-style layout for mixed sizes.
+    const MAX_ROW_W = 1400;
+    const GAP = 20;
+    let cx = 0,
+      cy = 0,
+      rowH = 0;
+    for (const t of tiles) {
+      if (cx + t.w > MAX_ROW_W && cx > 0) {
+        cx = 0;
+        cy += rowH + GAP;
+        rowH = 0;
+      }
+      t.x = cx;
+      t.y = cy;
+      cx += t.w + GAP;
+      if (t.h > rowH) rowH = t.h;
+    }
+
+    const bboxRight = tiles.reduce((a, t) => Math.max(a, t.x + t.w), 0);
+    const bboxBottom = tiles.reduce((a, t) => Math.max(a, t.y + t.h), 0);
+    const c = worldCenter();
+    const shiftX = c.x - bboxRight / 2;
+    const shiftY = c.y - bboxBottom / 2;
+    const placed = tiles.map((t) => ({
+      ...t,
+      x: t.x + shiftX,
+      y: t.y + shiftY,
+    }));
+    dispatch({ type: "addItems", items: placed });
   };
 
   // Copy / cut: serialize selected items as a tagged JSON blob and write to the
@@ -250,8 +299,22 @@ const App = () => {
         }
       }
 
-      // 2. Any URL we can find in the clipboard — text/uri-list, text/plain
-      //    (whole or extracted substring), or text/html href.
+      // 2a. Multi-URL paste — if the clipboard text contains 2+ distinct
+      //     URLs, treat it as a bulk import (e.g. emailing yourself a list
+      //     of inspiration links). Each URL becomes the right item type and
+      //     they shelf-pack into a grid.
+      const text2 = cd.getData("text/plain");
+      if (text2) {
+        const all = extractAllUrls(text2);
+        if (all.length >= 2) {
+          e.preventDefault();
+          bulkImport(all);
+          return;
+        }
+      }
+
+      // 2b. Single URL we can find in the clipboard — text/uri-list,
+      //     text/plain (whole or extracted substring), or text/html href.
       const url = extractUrlFromClipboard(cd);
       if (url) {
         e.preventDefault();
@@ -360,6 +423,7 @@ const App = () => {
         saveStatus={saveStatus}
         backup={backupInfo}
         backupActions={backupActions}
+        onOpenBulkImport={() => setBulkOpen(true)}
       />
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
@@ -367,6 +431,144 @@ const App = () => {
           <span>Drop image to add to board</span>
         </div>
       )}
+      {bulkOpen && (
+        <BulkImportModal
+          onClose={() => setBulkOpen(false)}
+          onImport={(urls) => {
+            bulkImport(urls);
+            setBulkOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+// Modal for pasting/typing a list of URLs. Shows a live count of how many
+// URLs were detected so the user knows what they're about to import.
+const BulkImportModal = ({
+  onClose,
+  onImport,
+}: {
+  onClose: () => void;
+  onImport: (urls: string[]) => void;
+}) => {
+  const [text, setText] = useState("");
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the textarea on open.
+  useEffect(() => {
+    taRef.current?.focus();
+  }, []);
+
+  // Esc closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const urls = extractAllUrls(text);
+
+  return (
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.3)",
+        zIndex: 1500,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          boxShadow: "var(--shadow)",
+          padding: 20,
+          minWidth: 480,
+          maxWidth: 640,
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Import links</div>
+          <div style={{ fontSize: 11, color: "var(--text-3)" }}>
+            {urls.length} URL{urls.length === 1 ? "" : "s"} detected
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.4 }}>
+          Paste anything containing URLs — one per line, comma-separated, or
+          an email body. Each will be added as the right kind of item
+          (Instagram / X / image / link) and tiled into a grid.
+        </div>
+        <textarea
+          ref={taRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={"https://www.instagram.com/p/...\nhttps://x.com/.../status/...\nhttps://youtube.com/watch?v=..."}
+          spellCheck={false}
+          rows={12}
+          style={{
+            width: "100%",
+            padding: 10,
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 12,
+            color: "var(--text)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            outline: "none",
+            resize: "vertical",
+            boxSizing: "border-box",
+            minHeight: 200,
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              border: "1px solid var(--border)",
+              background: "var(--surface)",
+              color: "var(--text)",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onImport(urls)}
+            disabled={urls.length === 0}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              border: "1px solid var(--text)",
+              background: urls.length > 0 ? "var(--text)" : "var(--surface)",
+              color: urls.length > 0 ? "var(--bg)" : "var(--text-faint)",
+              cursor: urls.length > 0 ? "pointer" : "not-allowed",
+            }}
+          >
+            Import {urls.length > 0 ? urls.length : ""}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

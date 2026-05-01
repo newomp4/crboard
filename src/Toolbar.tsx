@@ -18,6 +18,7 @@ type Props = {
   saveStatus: SaveStatus;
   backup: BackupInfo;
   backupActions: BackupActions;
+  onOpenBulkImport: () => void;
 };
 
 export const Toolbar = ({
@@ -26,6 +27,7 @@ export const Toolbar = ({
   saveStatus,
   backup,
   backupActions,
+  onOpenBulkImport,
 }: Props) => {
   const { board, tool } = state;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -187,6 +189,16 @@ export const Toolbar = ({
                 }}
               >
                 Save as .crboard
+              </MenuItem>
+              <Sep />
+              <MenuItem
+                onClick={() => {
+                  onOpenBulkImport();
+                  setMenuOpen(false);
+                }}
+                subtitle="Paste a list of links to add many items at once"
+              >
+                Import links…
               </MenuItem>
               <Sep />
               <MenuItem

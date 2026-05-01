@@ -188,6 +188,24 @@ export const itemFromUrl = (
   };
 };
 
+// Pull every URL we can find out of a freeform string. Used for bulk import
+// when the user pastes a list of links from notes or email — handles plain
+// lines, comma-separated, prose with embedded links, etc. Deduped, preserves
+// first-seen order.
+export const extractAllUrls = (text: string): string[] => {
+  const matches = text.match(/https?:\/\/[^\s<>"`'\]]+[^\s<>"`'.,;)\]}>]/g);
+  if (!matches) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of matches) {
+    if (!seen.has(u)) {
+      seen.add(u);
+      out.push(u);
+    }
+  }
+  return out;
+};
+
 // Walk through the standard clipboard MIME types in priority order looking
 // for something we can treat as a URL. Each branch handles a real-world quirk:
 //   - text/uri-list is what Safari and many drag-drop sources set when you

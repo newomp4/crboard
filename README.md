@@ -20,7 +20,7 @@ Then open the printed URL (usually http://localhost:5173).
 
 - **Pan**: scroll, or hold space and drag, or middle-click drag.
 - **Zoom**: ⌘/ctrl + scroll, or pinch on a trackpad.
-- **Add text**: pick the text tool (T), click anywhere, type. Double-click to edit again.
+- **Add text**: pick the text tool (T), click anywhere, type. Markdown formatting renders when you click away — `**bold**`, `_italic_`, `~~strike~~`, `` `code` ``, `[label](url)`, `# heading`, `- bullet`. Double-click to edit raw markdown again.
 - **Add image**: click the image button — or paste an image from your clipboard, or drag an image file onto the canvas.
 - **Add an embed/link**: click the link button and paste a URL. YouTube / Instagram / TikTok / X / Vimeo / Spotify auto-detect into a playable embed; everything else becomes a link card. Embeds always show the source URL in a small footer below — click it to open the original page in a new tab.
 - **Connect items with arrows**: pick the connector tool (`C`), drag from one item to another.

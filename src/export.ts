@@ -51,9 +51,21 @@ export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
     background-image:radial-gradient(circle,var(--grid-dot) 1px,transparent 1px)}
   #world{position:absolute;left:0;top:0;transform-origin:0 0;width:0;height:0}
   .item{position:absolute}
-  .item.text{padding:12px;line-height:1.4;background:var(--surface-2);
+  .item.text{padding:12px;line-height:1.35;background:var(--surface-2);
     border:1px solid var(--border);color:var(--text);
-    white-space:pre-wrap;overflow:auto}
+    white-space:pre-wrap;word-break:break-word;overflow:hidden}
+  .item.text h1,.item.text h2,.item.text h3,.item.text h4,.item.text h5,.item.text h6{
+    font-weight:700;margin:0 0 .4em 0;line-height:1.2}
+  .item.text h1{font-size:1.6em}.item.text h2{font-size:1.35em}
+  .item.text h3{font-size:1.15em}.item.text h4{font-size:1.05em}
+  .item.text h5{font-size:1em;font-weight:600}.item.text h6{font-size:.9em;font-weight:600}
+  .item.text div{line-height:1.35}
+  .item.text ul,.item.text ol{padding-left:1.4em;margin:0 0 .4em 0}
+  .item.text li{line-height:1.4}
+  .item.text code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    background:var(--border);padding:.05em .3em;border-radius:2px;font-size:.9em}
+  .item.text a{color:var(--text);text-decoration:underline}
+  .item.text strong{font-weight:700}.item.text em{font-style:italic}.item.text s{text-decoration:line-through}
   .item.image img{width:100%;height:100%;object-fit:contain;display:block;background:var(--bg)}
   .item.embed{display:flex;flex-direction:column;background:var(--bg);
     border:1px solid var(--border);overflow:hidden}
@@ -114,6 +126,42 @@ const VIEWER_JS = `
   function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
+  // Mini markdown renderer — same rules as src/markdown.ts in the editor.
+  function safeUrl(u){return /^https?:\\/\\//i.test(String(u).trim())?String(u).trim():'#';}
+  function mdInline(text){
+    var codes=[];
+    var s=text.replace(/\`([^\`\\n]+)\`/g,function(_,c){codes.push(c);return ' CODE'+(codes.length-1)+' ';});
+    s=escapeHtml(s);
+    s=s.replace(/\\*\\*([^*\\n]+?)\\*\\*/g,'<strong>$1</strong>');
+    s=s.replace(/__([^_\\n]+?)__/g,'<strong>$1</strong>');
+    s=s.replace(/(?<!\\*)\\*([^*\\n]+?)\\*(?!\\*)/g,'<em>$1</em>');
+    s=s.replace(/(?<!_)_([^_\\n]+?)_(?!_)/g,'<em>$1</em>');
+    s=s.replace(/~~([^~\\n]+?)~~/g,'<s>$1</s>');
+    s=s.replace(/\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\)/g,function(_,label,url){
+      return '<a href="'+escapeHtml(safeUrl(url))+'" target="_blank" rel="noreferrer">'+label+'</a>';
+    });
+    s=s.replace(/ CODE(\\d+) /g,function(_,i){return '<code>'+escapeHtml(codes[+i])+'</code>';});
+    return s;
+  }
+  function mdRender(text){
+    if(!text) return '';
+    var lines=text.split('\\n'); var out=[]; var listType=null;
+    function closeList(){ if(listType){ out.push('</'+listType+'>'); listType=null; } }
+    for(var i=0;i<lines.length;i++){
+      var line=lines[i];
+      var hm=line.match(/^(#{1,6})\\s+(.*)$/);
+      if(hm){ closeList(); var lvl=hm[1].length; out.push('<h'+lvl+'>'+mdInline(hm[2])+'</h'+lvl+'>'); continue; }
+      var ulm=line.match(/^[-*]\\s+(.*)$/);
+      if(ulm){ if(listType!=='ul'){closeList();out.push('<ul>');listType='ul';} out.push('<li>'+mdInline(ulm[1])+'</li>'); continue; }
+      var olm=line.match(/^\\d+\\.\\s+(.*)$/);
+      if(olm){ if(listType!=='ol'){closeList();out.push('<ol>');listType='ol';} out.push('<li>'+mdInline(olm[1])+'</li>'); continue; }
+      closeList();
+      out.push('<div>'+(mdInline(line)||'&nbsp;')+'</div>');
+    }
+    closeList();
+    return out.join('');
+  }
+
   function detectEmbed(input){
     try{var u=new URL(input);}catch(e){return null;}
     if(u.hostname.indexOf('youtu.be')>=0){
@@ -154,7 +202,8 @@ const VIEWER_JS = `
     el.style.zIndex=it.z||0;
     if(it.type==='text'){
       el.style.fontSize=(it.fontSize||16)+'px';
-      el.textContent=it.text||'';
+      el.style.fontWeight=(it.fontWeight||400);
+      el.innerHTML=mdRender(it.text||'');
     } else if(it.type==='image'){
       var img=document.createElement('img'); img.src=it.src; img.alt=it.alt||''; img.draggable=false;
       el.appendChild(img);

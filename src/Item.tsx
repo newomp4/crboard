@@ -9,6 +9,7 @@ import type { Item, View } from "./types";
 import type { Action } from "./store";
 import { detectEmbed } from "./embeds";
 import { computeSnap, type Guide } from "./snap";
+import { renderMarkdown } from "./markdown";
 
 type Props = {
   item: Item;
@@ -463,6 +464,13 @@ const ItemBody = ({
 //
 // We let the height of the *item* track the content. The user can still set a
 // width via the left/right edge handles; the height fits the text.
+// Two presentations:
+//   - editing: a real <textarea> with the raw markdown source.
+//   - viewing: a <div> containing the rendered markdown HTML.
+// Auto-grow measures whichever element is currently mounted. Switching between
+// the two can cause a small height jump (a "# Heading" raw line is shorter
+// than the rendered h1) — that's intentional: the box always fits whatever
+// you're looking at. Click outside to leave edit mode and see the formatting.
 const TextBody = ({
   item,
   editing,
@@ -474,38 +482,36 @@ const TextBody = ({
   setEditing: (v: boolean) => void;
   dispatch: React.Dispatch<Action>;
 }) => {
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
 
-  // Auto-grow: every time the text or width changes, recompute height to fit.
-  // We measure the textarea by setting height:auto and reading scrollHeight,
-  // then update the item to match.
-  //
-  // Important details:
-  //   1. With box-sizing:border-box, scrollHeight reports content + padding
-  //      but EXCLUDES the border. The wrapper sets the textarea height via
-  //      height:100% which DOES include the border, so we add it back —
-  //      otherwise the last line gets clipped.
-  //   2. We must restore the inline height to "100%" after measuring.
-  //      Otherwise React's reconciler sees the style prop is unchanged and
-  //      doesn't sync the DOM, leaving the textarea stuck at "auto" — which
-  //      Chrome renders at the default rows attribute (~2 lines), and
-  //      scrollTop preserves a mid-content position. Result: a tall wrapper
-  //      with a small textarea at the top scrolled mid-text. (This was the
-  //      "saved file opens with text overflowing the box" bug.)
-  //   3. scrollTop = 0 belt-and-suspenders for the same reason: keep content
-  //      top-aligned. With auto-grow keeping content within bounds, this is
-  //      a no-op during normal use.
+  // Auto-grow: pick the active element and feed its measured height back as
+  // item.h. Always restore textarea inline height to "100%" after the temporary
+  // "auto" measurement (otherwise React's reconciler doesn't sync the DOM and
+  // the textarea ends up stuck at the browser's default rows height, which
+  // visually clips content — this was the "text spills out of the box" bug).
   useLayoutEffect(() => {
-    const ta = ref.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    const cs = window.getComputedStyle(ta);
-    const borderY =
-      (parseFloat(cs.borderTopWidth) || 0) +
-      (parseFloat(cs.borderBottomWidth) || 0);
-    const measured = Math.max(MIN_TEXT_H, Math.ceil(ta.scrollHeight + borderY));
-    ta.style.height = "100%";
-    ta.scrollTop = 0;
+    let measured: number;
+    if (editing) {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.style.height = "auto";
+      const cs = window.getComputedStyle(ta);
+      const borderY =
+        (parseFloat(cs.borderTopWidth) || 0) +
+        (parseFloat(cs.borderBottomWidth) || 0);
+      measured = Math.max(
+        MIN_TEXT_H,
+        Math.ceil(ta.scrollHeight + borderY),
+      );
+      ta.style.height = "100%";
+      ta.scrollTop = 0;
+    } else {
+      const v = viewRef.current;
+      if (!v) return;
+      // offsetHeight already includes padding + border on the rendered div.
+      measured = Math.max(MIN_TEXT_H, Math.ceil(v.offsetHeight));
+    }
     if (Math.abs(measured - item.h) > 0.5) {
       dispatch({
         type: "updateItem",
@@ -513,76 +519,98 @@ const TextBody = ({
         patch: { h: measured } as Partial<Item>,
       });
     }
-  }, [item.text, item.w, item.fontSize, item.fontWeight, item.h, item.id, dispatch]);
+  }, [
+    item.text,
+    item.w,
+    item.fontSize,
+    item.fontWeight,
+    item.h,
+    item.id,
+    editing,
+    dispatch,
+  ]);
 
   // Drop into editing → focus + place caret at end.
   useEffect(() => {
-    if (editing && ref.current) {
-      const ta = ref.current;
+    if (editing && taRef.current) {
+      const ta = taRef.current;
       ta.focus();
       const end = ta.value.length;
       ta.setSelectionRange(end, end);
     }
   }, [editing]);
 
-  return (
-    <textarea
-      ref={ref}
-      value={item.text}
-      readOnly={!editing}
-      // Keep the textarea out of the keyboard tab order while not editing —
-      // otherwise pressing Tab can quietly focus it and "hijack" Backspace.
-      tabIndex={editing ? 0 : -1}
-      placeholder={editing ? "Type…" : ""}
-      spellCheck={editing}
-      onChange={(e) =>
-        dispatch({
-          type: "updateItem",
-          id: item.id,
-          patch: { text: e.target.value } as Partial<Item>,
-        })
-      }
-      onBlur={() => setEditing(false)}
-      // While editing, don't propagate pointer events so the wrapper's drag
-      // handler doesn't interfere with text selection inside the field.
-      onPointerDown={(e) => {
-        if (editing) e.stopPropagation();
-      }}
-      onKeyDown={(e) => {
-        // Esc / Cmd+Enter both commit and exit edit mode.
-        if (
-          e.key === "Escape" ||
-          ((e.metaKey || e.ctrlKey) && e.key === "Enter")
-        ) {
-          e.preventDefault();
-          ref.current?.blur();
+  // Shared font/box styling so the textarea and view div have the same metrics
+  // (matters mostly for predictable wrapping when toggling edit/view).
+  const baseStyle: React.CSSProperties = {
+    width: "100%",
+    height: "100%",
+    padding: 12,
+    margin: 0,
+    fontSize: item.fontSize,
+    fontWeight: item.fontWeight ?? 400,
+    lineHeight: 1.35,
+    fontFamily: "inherit",
+    color: "var(--text)",
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    boxSizing: "border-box",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflow: "hidden",
+  };
+
+  if (editing) {
+    return (
+      <textarea
+        ref={taRef}
+        value={item.text}
+        readOnly={false}
+        tabIndex={0}
+        placeholder="Type… (markdown: **bold** _italic_ `code` # heading - bullet)"
+        spellCheck
+        onChange={(e) =>
+          dispatch({
+            type: "updateItem",
+            id: item.id,
+            patch: { text: e.target.value } as Partial<Item>,
+          })
         }
+        onBlur={() => setEditing(false)}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (
+            e.key === "Escape" ||
+            ((e.metaKey || e.ctrlKey) && e.key === "Enter")
+          ) {
+            e.preventDefault();
+            taRef.current?.blur();
+          }
+        }}
+        style={{
+          ...baseStyle,
+          outline: "none",
+          resize: "none",
+          cursor: "text",
+          display: "block",
+        }}
+      />
+    );
+  }
+
+  // View mode: rendered markdown. The .md-view class controls heading sizes,
+  // code styling, list indent, etc. (see index.css). Pointerdown on an anchor
+  // is allowed to bubble normally for navigation, but we stopPropagation so
+  // the wrapper doesn't grab the click as a drag start.
+  return (
+    <div
+      ref={viewRef}
+      className="md-view"
+      onPointerDown={(e) => {
+        if ((e.target as HTMLElement).closest("a")) e.stopPropagation();
       }}
-      style={{
-        // Width fills the item; height is driven by scrollHeight measurement.
-        width: "100%",
-        height: "100%",
-        padding: 12,
-        margin: 0,
-        fontSize: item.fontSize,
-        fontWeight: item.fontWeight ?? 400,
-        lineHeight: 1.35,
-        fontFamily: "inherit",
-        color: "var(--text)",
-        background: "var(--surface-2)",
-        border: "1px solid var(--border)",
-        outline: "none",
-        resize: "none",
-        // pre-wrap-equivalent for textareas — wraps long lines, preserves \n.
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-        overflow: "hidden",
-        cursor: editing ? "text" : "default",
-        // Keep the textarea visually inert when not editing.
-        pointerEvents: editing ? "auto" : "none",
-        boxSizing: "border-box",
-        display: "block",
-      }}
+      style={{ ...baseStyle, cursor: "default" }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
     />
   );
 };

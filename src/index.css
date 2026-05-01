@@ -143,6 +143,72 @@ img {
   -webkit-user-select: text;
 }
 
+/*
+  Markdown rendering for text items in view mode.
+  Sizes are em-relative so they scale with the chosen text preset (Body/Heading/Title).
+*/
+.md-view h1,
+.md-view h2,
+.md-view h3,
+.md-view h4,
+.md-view h5,
+.md-view h6 {
+  font-weight: 700;
+  margin: 0 0 0.4em 0;
+  line-height: 1.2;
+}
+.md-view h1 {
+  font-size: 1.6em;
+}
+.md-view h2 {
+  font-size: 1.35em;
+}
+.md-view h3 {
+  font-size: 1.15em;
+}
+.md-view h4 {
+  font-size: 1.05em;
+}
+.md-view h5 {
+  font-size: 1em;
+  font-weight: 600;
+}
+.md-view h6 {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.md-view div {
+  line-height: 1.35;
+}
+.md-view ul,
+.md-view ol {
+  padding-left: 1.4em;
+  margin: 0 0 0.4em 0;
+}
+.md-view li {
+  line-height: 1.4;
+}
+.md-view code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--hover);
+  padding: 0.05em 0.3em;
+  border-radius: 2px;
+  font-size: 0.9em;
+}
+.md-view a {
+  color: var(--text);
+  text-decoration: underline;
+}
+.md-view strong {
+  font-weight: 700;
+}
+.md-view em {
+  font-style: italic;
+}
+.md-view s {
+  text-decoration: line-through;
+}
+
 /* Visible "drop here" overlay shown while files are dragged from the OS. */
 .drop-overlay {
   position: fixed;

@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Action, SaveStatus, State } from "./store";
 import type { ItemDraft } from "./types";
 import { itemFromUrl } from "./embeds";
+import type { BackupActions, BackupInfo } from "./App";
 import { fileToDataUrl, openBoardFile, saveBoardFile } from "./io";
 import { downloadHtml } from "./export";
 import { clampZoom, fitToBounds, zoomCenter } from "./coords";
@@ -15,9 +16,17 @@ type Props = {
   state: State;
   dispatch: React.Dispatch<Action>;
   saveStatus: SaveStatus;
+  backup: BackupInfo;
+  backupActions: BackupActions;
 };
 
-export const Toolbar = ({ state, dispatch, saveStatus }: Props) => {
+export const Toolbar = ({
+  state,
+  dispatch,
+  saveStatus,
+  backup,
+  backupActions,
+}: Props) => {
   const { board, tool } = state;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -188,6 +197,46 @@ export const Toolbar = ({ state, dispatch, saveStatus }: Props) => {
               >
                 Export shareable .html
               </MenuItem>
+              {backup.supported && (
+                <>
+                  <Sep />
+                  {backup.enabled ? (
+                    <>
+                      <MenuItem
+                        onClick={async () => {
+                          await backupActions.enable();
+                          setMenuOpen(false);
+                        }}
+                        subtitle={`${backup.folderName ?? "—"} / ${backup.filename}${
+                          backup.lastBackupAt
+                            ? `  ·  ${formatRelative(backup.lastBackupAt)}`
+                            : "  ·  saving…"
+                        }`}
+                      >
+                        Auto-backup: on
+                      </MenuItem>
+                      <MenuItem
+                        onClick={async () => {
+                          await backupActions.disable();
+                          setMenuOpen(false);
+                        }}
+                      >
+                        Disable auto-backup
+                      </MenuItem>
+                    </>
+                  ) : (
+                    <MenuItem
+                      onClick={async () => {
+                        await backupActions.enable();
+                        setMenuOpen(false);
+                      }}
+                      subtitle="Pick a folder, board saves there every 10 min"
+                    >
+                      Set up auto-backup folder…
+                    </MenuItem>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -845,9 +894,13 @@ const BarButton = ({
 const MenuItem = ({
   children,
   onClick,
+  subtitle,
 }: {
   children: React.ReactNode;
   onClick: () => void;
+  // Optional dim line below the main label, used to show backup folder path,
+  // last-saved timestamp, etc.
+  subtitle?: string;
 }) => (
   <button
     onClick={onClick}
@@ -861,9 +914,37 @@ const MenuItem = ({
     onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
   >
-    {children}
+    <div>{children}</div>
+    {subtitle && (
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--text-3)",
+          marginTop: 2,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          maxWidth: 280,
+        }}
+      >
+        {subtitle}
+      </div>
+    )}
   </button>
 );
+
+// "5 minutes ago" / "just now" formatting for the backup status line. Updates
+// only when the menu rerenders, which is fine — the absolute timestamp is in
+// the title attribute if you really want precision.
+const formatRelative = (ts: number): string => {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return `${h}h ago`;
+};
 
 const Sep = () => (
   <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />

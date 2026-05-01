@@ -2,19 +2,43 @@
 // global paste/drop handlers (so you can drag-drop an image file or paste a
 // URL anywhere).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
 import { useStore } from "./store";
 import { extractUrlFromClipboard, itemFromUrl } from "./embeds";
 import { fileToDataUrl } from "./io";
+import {
+  backupFilename,
+  isBackupSupported,
+  loadSavedBackupDir,
+  pickBackupDir,
+  clearBackupDir,
+  writeBackup,
+} from "./backup";
 import type { Item, ItemDraft } from "./types";
 
 // Magic number used to identify clipboard payloads written by crboard, so a
 // crboard paste isn't confused with arbitrary JSON the user might copy from
 // elsewhere.
 const CR_CLIPBOARD_TAG = "crboard/v1";
+
+// Auto-backup runs every BACKUP_INTERVAL milliseconds while a folder is set up.
+const BACKUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
+export type BackupInfo = {
+  enabled: boolean;
+  folderName: string | null;
+  lastBackupAt: number | null;
+  filename: string;
+  supported: boolean;
+};
+
+export type BackupActions = {
+  enable: () => Promise<void>;
+  disable: () => Promise<void>;
+};
 
 const App = () => {
   const { state, dispatch, saveStatus } = useStore();
@@ -25,6 +49,70 @@ const App = () => {
     x: (window.innerWidth / 2 - state.board.view.x) / state.board.view.zoom,
     y: (window.innerHeight / 2 - state.board.view.y) / state.board.view.zoom,
   });
+
+  // ---- auto-backup ----
+  // The backup interval reads the LATEST board via a ref so the timer doesn't
+  // need to be torn down/recreated on every keystroke (which would defeat the
+  // 10-minute schedule).
+  const [backupHandle, setBackupHandle] =
+    useState<FileSystemDirectoryHandle | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<number | null>(null);
+  const boardRef = useRef(state.board);
+  useEffect(() => {
+    boardRef.current = state.board;
+  }, [state.board]);
+
+  // On mount, try to silently resume the previous backup folder.
+  useEffect(() => {
+    void (async () => {
+      const h = await loadSavedBackupDir();
+      if (h) setBackupHandle(h);
+    })();
+  }, []);
+
+  // While a backup folder is set up, run an initial backup (so the user sees
+  // the file appear) and re-run every BACKUP_INTERVAL ms.
+  useEffect(() => {
+    if (!backupHandle) return;
+    let alive = true;
+    const run = async () => {
+      if (!alive) return;
+      try {
+        await writeBackup(backupHandle, boardRef.current);
+        if (alive) setLastBackupAt(Date.now());
+      } catch (err) {
+        // File handle may have lost permission (folder moved, browser
+        // restarted, etc.). Drop it so the user re-enables it from the menu.
+        console.warn("crboard auto-backup failed:", err);
+      }
+    };
+    void run();
+    const id = setInterval(() => void run(), BACKUP_INTERVAL);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [backupHandle]);
+
+  const backupInfo: BackupInfo = {
+    enabled: backupHandle !== null,
+    folderName: backupHandle?.name ?? null,
+    lastBackupAt,
+    filename: backupFilename,
+    supported: isBackupSupported(),
+  };
+
+  const backupActions: BackupActions = {
+    enable: async () => {
+      const h = await pickBackupDir();
+      if (h) setBackupHandle(h);
+    },
+    disable: async () => {
+      await clearBackupDir();
+      setBackupHandle(null);
+      setLastBackupAt(null);
+    },
+  };
 
   // Copy / cut: serialize selected items as a tagged JSON blob and write to the
   // system clipboard. We store the items keeping their absolute positions so
@@ -266,7 +354,13 @@ const App = () => {
   return (
     <div style={{ position: "fixed", inset: 0 }}>
       <Canvas state={state} dispatch={dispatch} />
-      <Toolbar state={state} dispatch={dispatch} saveStatus={saveStatus} />
+      <Toolbar
+        state={state}
+        dispatch={dispatch}
+        saveStatus={saveStatus}
+        backup={backupInfo}
+        backupActions={backupActions}
+      />
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
         <div className="drop-overlay">

@@ -480,11 +480,21 @@ const TextBody = ({
   // We measure the textarea by setting height:auto and reading scrollHeight,
   // then update the item to match.
   //
-  // Important detail: with box-sizing:border-box, scrollHeight reports
-  // content + padding but EXCLUDES the border. The wrapper sets the textarea
-  // height (via height:100%) including the border, so we have to add it back —
-  // otherwise the last line gets clipped. We read the actual border width from
-  // computed styles so this stays correct if the border ever changes.
+  // Important details:
+  //   1. With box-sizing:border-box, scrollHeight reports content + padding
+  //      but EXCLUDES the border. The wrapper sets the textarea height via
+  //      height:100% which DOES include the border, so we add it back —
+  //      otherwise the last line gets clipped.
+  //   2. We must restore the inline height to "100%" after measuring.
+  //      Otherwise React's reconciler sees the style prop is unchanged and
+  //      doesn't sync the DOM, leaving the textarea stuck at "auto" — which
+  //      Chrome renders at the default rows attribute (~2 lines), and
+  //      scrollTop preserves a mid-content position. Result: a tall wrapper
+  //      with a small textarea at the top scrolled mid-text. (This was the
+  //      "saved file opens with text overflowing the box" bug.)
+  //   3. scrollTop = 0 belt-and-suspenders for the same reason: keep content
+  //      top-aligned. With auto-grow keeping content within bounds, this is
+  //      a no-op during normal use.
   useLayoutEffect(() => {
     const ta = ref.current;
     if (!ta) return;
@@ -494,6 +504,8 @@ const TextBody = ({
       (parseFloat(cs.borderTopWidth) || 0) +
       (parseFloat(cs.borderBottomWidth) || 0);
     const measured = Math.max(MIN_TEXT_H, Math.ceil(ta.scrollHeight + borderY));
+    ta.style.height = "100%";
+    ta.scrollTop = 0;
     if (Math.abs(measured - item.h) > 0.5) {
       dispatch({
         type: "updateItem",

@@ -3,6 +3,8 @@
 // URL anywhere).
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { exportToHtml } from "./export";
+import { decodeShareHash, type SharePayload } from "./share";
 import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
@@ -840,3 +842,105 @@ const imgSize = (src: string): Promise<{ w: number; h: number }> =>
   });
 
 export default App;
+
+// ── Board viewer (read-only, opened from a share link) ────────────────────────
+
+const BoardViewer = ({ board, theme }: SharePayload) => {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Build the self-contained HTML and load it via a blob URL (no size limit,
+    // unlike the 1 MB cap on the srcdoc attribute).
+    const html = exportToHtml(board, theme);
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [board, theme]);
+
+  const dark = theme === "dark";
+  const bg     = dark ? "#0a0a0a" : "#fafafa";
+  const border = dark ? "#262626" : "#e5e5e5";
+  const text   = dark ? "#fafafa" : "#0a0a0a";
+  const text3  = dark ? "#a3a3a3" : "#737373";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        flexDirection: "column",
+        background: bg,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "0 12px",
+          height: 44,
+          flexShrink: 0,
+          borderBottom: `1px solid ${border}`,
+          background: bg,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            color: text,
+          }}
+        >
+          crboard
+        </span>
+        <div style={{ width: 1, height: 18, background: border }} />
+        <span style={{ fontSize: 13, fontWeight: 500, color: text }}>
+          {board.name}
+        </span>
+        <div style={{ flex: 1 }} />
+        <span
+          style={{
+            fontSize: 11,
+            color: text3,
+            padding: "3px 8px",
+            border: `1px solid ${border}`,
+          }}
+        >
+          view only
+        </span>
+      </div>
+      {src && (
+        <iframe
+          src={src}
+          style={{ flex: 1, border: "none", display: "block" }}
+          title={board.name}
+        />
+      )}
+    </div>
+  );
+};
+
+// ── AppRoot: decides editor vs viewer based on URL hash ───────────────────────
+
+export const AppRoot = () => {
+  // undefined = still detecting, null = editor mode, object = viewer mode
+  const [viewer, setViewer] = useState<SharePayload | null | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    const hash = location.hash.slice(1); // strip leading #
+    if (!hash.startsWith("share/")) {
+      setViewer(null);
+      return;
+    }
+    decodeShareHash(hash).then((payload) => setViewer(payload ?? null));
+  }, []);
+
+  if (viewer === undefined) return null; // brief decode pass
+  if (viewer === null) return <App />;
+  return <BoardViewer {...viewer} />;
+};

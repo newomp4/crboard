@@ -10,6 +10,8 @@ import { itemFromUrl } from "./embeds";
 import type { BackupActions, BackupInfo } from "./App";
 import { fileToDataUrl, openBoardFile, saveBoardFile } from "./io";
 import { downloadHtml } from "./export";
+import { downloadImage } from "./exportImage";
+import { buildShareUrl, encodeShareHash } from "./share";
 import { clampZoom, fitToBounds, zoomCenter } from "./coords";
 
 type Props = {
@@ -32,6 +34,22 @@ export const Toolbar = ({
   const { board, tool } = state;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [shareCopied, setShareCopied] = useState(false);
+
+  const copyShareLink = async () => {
+    try {
+      const hash = await encodeShareHash(board, state.theme);
+      const url = buildShareUrl(hash);
+      await navigator.clipboard.writeText(url);
+      setShareCopied(true);
+      setTimeout(() => {
+        setShareCopied(false);
+        setMenuOpen(false);
+      }, 1500);
+    } catch {
+      setMenuOpen(false);
+    }
+  };
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -203,11 +221,29 @@ export const Toolbar = ({
               <Sep />
               <MenuItem
                 onClick={() => {
+                  if (!shareCopied) copyShareLink();
+                }}
+                subtitle="Opens in browser — no download needed"
+              >
+                {shareCopied ? "Link copied!" : "Copy share link"}
+              </MenuItem>
+              <Sep />
+              <MenuItem
+                onClick={() => {
                   downloadHtml(board, state.theme);
                   setMenuOpen(false);
                 }}
               >
                 Export shareable .html
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  downloadImage(board, state.theme);
+                }}
+                subtitle="High-res PNG of the whole board (zoom-in quality)"
+              >
+                Export as PNG…
               </MenuItem>
               {backup.supported && (
                 <>

@@ -13,8 +13,8 @@ import { useEffect, useMemo, useReducer, useState } from "react";
 import { nanoid } from "nanoid";
 import type { Board, Item, ItemDraft, Theme, Tool, View } from "./types";
 import { emptyBoard } from "./types";
+import { saveBoardById } from "./boards";
 
-const STORAGE_KEY = "crboard:current";
 const THEME_KEY = "crboard:theme";
 const HISTORY_CAP = 100;
 
@@ -418,7 +418,7 @@ const loadInitial = (): State => {
     theme,
   };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem("crboard:current");
     if (raw) {
       const board = JSON.parse(raw) as Board;
       if (board && board.version === 1) {
@@ -438,27 +438,49 @@ export type SaveStatus = {
   pending: boolean;
 };
 
-export const useStore = () => {
-  const [state, dispatch] = useReducer(reducer, undefined, loadInitial);
+export const useStore = (boardId?: string, initialBoard?: Board) => {
+  const [state, dispatch] = useReducer(reducer, undefined, () => {
+    if (initialBoard) {
+      // Editor opened with a specific board — use it directly.
+      const theme = loadTheme();
+      return {
+        board: initialBoard,
+        past: [],
+        future: [],
+        selection: new Set<string>(),
+        tool: "select" as Tool,
+        toolLocked: false,
+        editId: null,
+        pen: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 2 },
+        theme,
+      };
+    }
+    return loadInitial();
+  });
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({
     savedAt: null,
     pending: false,
   });
 
-  // Debounced autosave to localStorage. We persist whenever the board content
-  // (not just transient view/selection) changes.
+  // Debounced autosave. Saves to the board's own slot when a boardId is
+  // provided, otherwise falls back to the legacy single-board key.
   useEffect(() => {
     setSaveStatus((s) => ({ ...s, pending: true }));
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.board));
+        if (boardId) {
+          saveBoardById(boardId, state.board);
+        } else {
+          localStorage.setItem("crboard:current", JSON.stringify(state.board));
+        }
         setSaveStatus({ savedAt: Date.now(), pending: false });
       } catch {
-        // Quota exceeded, etc. — non-fatal.
         setSaveStatus((s) => ({ ...s, pending: false }));
       }
     }, 250);
     return () => clearTimeout(t);
+  // boardId is stable for the lifetime of this store instance.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.board]);
 
   // Theme: persist + reflect on the <html> element so CSS variables swap.

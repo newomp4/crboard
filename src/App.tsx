@@ -5,6 +5,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { exportToHtml } from "./export";
 import { decodeShareHash, type SharePayload } from "./share";
+import { HomeScreen } from "./HomeScreen";
+import { migrateLegacyBoard } from "./boards";
 import { Canvas } from "./Canvas";
 import { Toolbar } from "./Toolbar";
 import { useToolShortcuts } from "./shortcuts";
@@ -24,7 +26,7 @@ import {
   writeBackup,
 } from "./backup";
 import { clampZoom } from "./coords";
-import type { Item, ItemDraft } from "./types";
+import type { Board, Item, ItemDraft } from "./types";
 
 // Magic number used to identify clipboard payloads written by crboard, so a
 // crboard paste isn't confused with arbitrary JSON the user might copy from
@@ -47,8 +49,16 @@ export type BackupActions = {
   disable: () => Promise<void>;
 };
 
-const App = () => {
-  const { state, dispatch, saveStatus } = useStore();
+const App = ({
+  boardId,
+  initialBoard,
+  onGoHome,
+}: {
+  boardId: string;
+  initialBoard: Board;
+  onGoHome: () => void;
+}) => {
+  const { state, dispatch, saveStatus } = useStore(boardId, initialBoard);
   useToolShortcuts(dispatch);
 
   // Compute world coordinates near the visible center for new items.
@@ -496,6 +506,7 @@ const App = () => {
         backup={backupInfo}
         backupActions={backupActions}
         onOpenBulkImport={() => setBulkOpen(true)}
+        onGoHome={onGoHome}
       />
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
@@ -923,24 +934,40 @@ const BoardViewer = ({ board, theme }: SharePayload) => {
   );
 };
 
-// ── AppRoot: decides editor vs viewer based on URL hash ───────────────────────
+// ── AppRoot: decides editor vs viewer vs home screen based on URL hash ────────
 
 export const AppRoot = () => {
-  // undefined = still detecting, null = editor mode, object = viewer mode
-  const [viewer, setViewer] = useState<SharePayload | null | undefined>(
-    undefined,
-  );
+  // undefined = detecting share link, null = not a share link
+  const [shareViewer, setShareViewer] = useState<SharePayload | null | undefined>(undefined);
+  const [activeBoard, setActiveBoard] = useState<{ id: string; board: Board } | null>(null);
 
   useEffect(() => {
-    const hash = location.hash.slice(1); // strip leading #
+    migrateLegacyBoard();
+    const hash = location.hash.slice(1);
     if (!hash.startsWith("share/")) {
-      setViewer(null);
+      setShareViewer(null);
       return;
     }
-    decodeShareHash(hash).then((payload) => setViewer(payload ?? null));
+    decodeShareHash(hash).then((payload) => setShareViewer(payload ?? null));
   }, []);
 
-  if (viewer === undefined) return null; // brief decode pass
-  if (viewer === null) return <App />;
-  return <BoardViewer {...viewer} />;
+  if (shareViewer === undefined) return null;
+  if (shareViewer !== null) return <BoardViewer {...shareViewer} />;
+
+  if (!activeBoard) {
+    return (
+      <HomeScreen
+        onOpen={(id, board) => setActiveBoard({ id, board })}
+      />
+    );
+  }
+
+  return (
+    <App
+      key={activeBoard.id}
+      boardId={activeBoard.id}
+      initialBoard={activeBoard.board}
+      onGoHome={() => setActiveBoard(null)}
+    />
+  );
 };

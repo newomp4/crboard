@@ -21,6 +21,7 @@ type Props = {
   backup: BackupInfo;
   backupActions: BackupActions;
   onOpenBulkImport: () => void;
+  onGoHome: () => void;
 };
 
 export const Toolbar = ({
@@ -30,6 +31,7 @@ export const Toolbar = ({
   backup,
   backupActions,
   onOpenBulkImport,
+  onGoHome,
 }: Props) => {
   const { board, tool } = state;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -132,9 +134,22 @@ export const Toolbar = ({
           gap: 12,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.04em" }}>
+        <button
+          onClick={onGoHome}
+          title="All boards"
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            color: "var(--text)",
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            padding: 0,
+          }}
+        >
           crboard
-        </div>
+        </button>
         <div style={{ width: 1, height: 18, background: "var(--border)" }} />
         <input
           value={board.name}

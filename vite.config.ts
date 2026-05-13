@@ -1,12 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  // GitHub Actions sets GITHUB_ACTIONS=true; the Pages site lives at /crboard/.
-  // Local dev keeps base = '/' so nothing changes in development.
-  base: process.env.GITHUB_ACTIONS ? "/crboard/" : "/",
+  // Production builds are always destined for GitHub Pages (/crboard/).
+  // The dev server stays at / so localhost:5173 works normally.
+  base: mode === "production" ? "/crboard/" : "/",
   server: {
     port: 5173,
   },
-});
+}));

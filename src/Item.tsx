@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { Item, View } from "./types";
 import type { Action } from "./store";
 import { detectEmbed } from "./embeds";
+import { VideoBody } from "./VideoBody";
 import { computeSnap, type Guide } from "./snap";
 import { renderMarkdown } from "./markdown";
 
@@ -19,7 +20,7 @@ type Props = {
   suppressIndividualHandles?: boolean;
   autoEdit?: boolean;
   view: View;
-  tool: "select" | "text" | "pen" | "connector";
+  tool: "select" | "text" | "pen" | "connector" | "shape";
   // Needed for multi-drag: the drag handler captures origin positions of
   // every selected item at gesture start so they all move together.
   allItems: Item[];
@@ -28,10 +29,32 @@ type Props = {
   onContextMenu?: (itemId: string, clientX: number, clientY: number) => void;
   // Reports active alignment guides during a drag so Canvas can render them.
   onSnapGuides?: (guides: { x: Guide | null; y: Guide | null } | null) => void;
+  // Reports a live "W × H" / position readout during resize/move (null = clear).
+  onMeasure?: (m: { label: string; x: number; y: number } | null) => void;
   dispatch: React.Dispatch<Action>;
 };
 
-const HANDLE_SIZE = 10;
+const HANDLE_SIZE = 10; // visible dot
+// Transparent hit area around each dot. Larger than the dot so the resize
+// cursor has a stable zone — the old flush-to-dot hit box made the cursor
+// flicker between resize/arrow on sub-pixel moves near a corner.
+const HANDLE_HIT = 18;
+
+// Resize cursor per handle position. Shared so startResize can pin this cursor
+// on <body> for the whole drag (otherwise the cursor flickers as the pointer
+// passes over the item, canvas, and other handles mid-resize).
+type HandlePosT = "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r";
+const RESIZE_CURSORS: Record<HandlePosT, string> = {
+  tl: "nwse-resize",
+  br: "nwse-resize",
+  tr: "nesw-resize",
+  bl: "nesw-resize",
+  t: "ns-resize",
+  b: "ns-resize",
+  l: "ew-resize",
+  r: "ew-resize",
+};
+
 // Minimum height for text items. Keeps short stickies large enough to grab
 // reliably with a mouse — 48px works out to roughly two lines + padding.
 const MIN_TEXT_H = 48;
@@ -47,25 +70,39 @@ export const ItemView = ({
   selectedIds,
   onContextMenu,
   onSnapGuides,
+  onMeasure,
   dispatch,
 }: Props) => {
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
+  // Live transform preview while scaling a text box by a corner. Dragging changes
+  // this (a GPU transform, no reflow) for smoothness; the real fontSize/width is
+  // committed once on release.
+  const [textScale, setTextScale] = useState<{ s: number; origin: string } | null>(
+    null,
+  );
+  const textCommitRef = useRef<{ x: number; y: number; w: number; fontSize: number } | null>(
+    null,
+  );
   // For embeds: double-click "engages" the iframe so clicks/drags inside reach
   // the embedded page (play, scrub, expand). Until then, the embed is locked
   // behind a transparent overlay so dragging the wrapper always moves it
   // instead of accidentally interacting with Twitter/YouTube/etc.
   const [interactive, setInteractive] = useState(false);
 
+  // Text items and sticky notes both hold editable text via the same edit flow.
+  const isEditableText =
+    item.type === "text" || (item.type === "shape" && item.shape === "note");
+
   // When the store flags this item as the one to edit immediately (e.g. it
   // was just created via the text tool), drop into edit mode and clear the
   // flag so a re-render doesn't keep retriggering it.
   useEffect(() => {
-    if (autoEdit && item.type === "text") {
+    if (autoEdit && isEditableText) {
       setEditing(true);
       dispatch({ type: "setEditId", id: null });
     }
-  }, [autoEdit, item.type, dispatch]);
+  }, [autoEdit, isEditableText, dispatch]);
 
   // Losing selection always exits edit/interactive mode — keeps the two
   // states in sync without a flicker.
@@ -181,11 +218,21 @@ export const ItemView = ({
           return o ? [{ id, x: o.x + dx, y: o.y + dy }] : [];
         });
         dispatch({ type: "setItemPositions", positions });
+        // Readout shows the grabbed item's new top-left in world coords.
+        const self = origins.get(item.id);
+        if (self) {
+          onMeasure?.({
+            label: `${Math.round(self.x + dx)}, ${Math.round(self.y + dy)}`,
+            x: ev.clientX,
+            y: ev.clientY,
+          });
+        }
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         onSnapGuides?.(null);
+        onMeasure?.(null);
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -199,6 +246,7 @@ export const ItemView = ({
       allItems,
       view.zoom,
       onSnapGuides,
+      onMeasure,
       dispatch,
     ],
   );
@@ -209,16 +257,28 @@ export const ItemView = ({
       e.preventDefault();
       (e.target as Element).setPointerCapture?.(e.pointerId);
 
+      // Pin the resize cursor on <body> for the whole gesture so it can't
+      // flicker as the pointer crosses the item/canvas/other handles.
+      const prevCursor = document.body.style.cursor;
+      const prevSelect = document.body.style.userSelect;
+      document.body.style.cursor = RESIZE_CURSORS[handle];
+      document.body.style.userSelect = "none";
+
       let committed = false;
 
       const startX = e.clientX;
       const startY = e.clientY;
       const orig = { x: item.x, y: item.y, w: item.w, h: item.h };
+      // Drawings can be legitimately small (a flat line), so don't force them
+      // up to the 40px floor used for cards/media — that made resize feel jumpy.
+      const minSize = item.type === "drawing" ? 12 : 40;
+      const origFont = item.type === "text" ? item.fontSize || 16 : 0;
 
       // Aspect ratio is locked by default for images and embeds (stretching
       // either looks bad — Instagram has a fixed ratio, photos shouldn't
       // squish). Shift inverts the default.
-      const lockByDefault = item.type === "image" || item.type === "embed";
+      const lockByDefault =
+        item.type === "image" || item.type === "embed" || item.type === "video";
       const aspect = orig.w / orig.h;
 
       // Decompose handle into anchors. The handle is the side(s) being
@@ -237,6 +297,36 @@ export const ItemView = ({
           committed = true;
         }
 
+        // Text corners UNIFORMLY SCALE the whole block — font, width, and height
+        // grow together like scaling an image, with the opposite corner pinned.
+        // Because width scales in lockstep with the font, the text reflows to the
+        // same line count, so height scales by the same factor: we can predict it
+        // (orig.h * scale) and anchor instantly, with no lag. Edge (l/r) handles
+        // fall through to the plain width-reflow path below.
+        if (item.type === "text" && (left || right) && (top || bottom)) {
+          // Scale from whichever axis the corner was pulled along more, so both
+          // horizontal and vertical drags grow the block.
+          const rW = (right ? orig.w + dx : orig.w - dx) / orig.w;
+          const rH = (bottom ? orig.h + dy : orig.h - dy) / orig.h;
+          const scale = Math.max(0.15, Math.max(rW, rH));
+          const nwT = Math.max(48, orig.w * scale);
+          const nhT = orig.h * scale; // predicted (proportional) height
+          const nf = Math.max(8, origFont * scale);
+          const nxT = left ? orig.x + orig.w - nwT : orig.x;
+          const nyT = top ? orig.y + orig.h - nhT : orig.y;
+          // Preview with a transform (smooth, no reflow); commit on release.
+          const s = nf / origFont;
+          const origin = `${left ? "right" : "left"} ${top ? "bottom" : "top"}`;
+          setTextScale({ s, origin });
+          textCommitRef.current = { x: nxT, y: nyT, w: nwT, fontSize: nf };
+          onMeasure?.({
+            label: `${Math.round(nf)} px`,
+            x: ev.clientX,
+            y: ev.clientY,
+          });
+          return;
+        }
+
         const locked = ev.shiftKey ? !lockByDefault : lockByDefault;
 
         // First compute unconstrained new dims based on which side is being pulled.
@@ -246,8 +336,8 @@ export const ItemView = ({
         else if (right) nw = orig.w + dx;
         if (top) nh = orig.h - dy;
         else if (bottom) nh = orig.h + dy;
-        nw = Math.max(40, nw);
-        nh = Math.max(40, nh);
+        nw = Math.max(minSize, nw);
+        nh = Math.max(minSize, nh);
 
         if (locked) {
           const cornerHandle = (left || right) && (top || bottom);
@@ -274,15 +364,35 @@ export const ItemView = ({
           id: item.id,
           patch: { x: nx, y: ny, w: nw, h: nh } as Partial<Item>,
         });
+        onMeasure?.({
+          label: `${Math.round(nw)} × ${Math.round(nh)}`,
+          x: ev.clientX,
+          y: ev.clientY,
+        });
       };
       const onUp = () => {
+        document.body.style.cursor = prevCursor;
+        document.body.style.userSelect = prevSelect;
+        onMeasure?.(null);
+        // Commit a text-corner scale: apply the real fontSize/width and drop the
+        // transform preview in one render so there's no flash.
+        const commit = textCommitRef.current;
+        if (commit) {
+          textCommitRef.current = null;
+          dispatch({
+            type: "updateItem",
+            id: item.id,
+            patch: commit as Partial<Item>,
+          });
+          setTextScale(null);
+        }
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    [item, view.zoom, dispatch],
+    [item, view.zoom, onMeasure, dispatch],
   );
 
   return (
@@ -291,8 +401,8 @@ export const ItemView = ({
       data-item-id={item.id}
       onPointerDown={startMove}
       onDoubleClick={() => {
-        if (item.type === "text") setEditing(true);
-        else if (item.type === "embed") setInteractive(true);
+        if (isEditableText) setEditing(true);
+        else if (item.type === "embed" || item.type === "video") setInteractive(true);
       }}
       onContextMenu={(e) => {
         if (editing) return;
@@ -313,8 +423,11 @@ export const ItemView = ({
         width: item.w,
         height: item.h,
         zIndex: item.z,
+        ...(textScale
+          ? { transform: `scale(${textScale.s})`, transformOrigin: textScale.origin }
+          : null),
       }}
-      className={`crboard-item${selected ? " selection-ring" : ""}`}
+      className={`crboard-item cr-item-in${selected ? " selection-ring" : ""}`}
     >
       <ItemBody
         item={item}
@@ -330,11 +443,12 @@ export const ItemView = ({
         !editing &&
         !suppressIndividualHandles && (
           <>
-            {/* Text items only show left/right edge handles. Height is always
-                content-driven (auto-grow), so exposing top/bottom handles just
-                fights with the auto-grow effect and creates flicker. */}
+            {/* Text: left/right edges change WIDTH (text reflows, height
+                auto-grows); corners SCALE the font (box grows both ways). No
+                pure top/bottom handles — height is content-driven, so a raw
+                height handle would just fight the auto-grow effect. */}
             {(item.type === "text"
-              ? (["l", "r"] as HandlePos[])
+              ? (["tl", "tr", "bl", "br", "l", "r"] as HandlePos[])
               : (["tl", "tr", "bl", "br", "t", "b", "l", "r"] as HandlePos[])
             ).map((p) => (
               <Handle key={p} pos={p} onPointerDown={startResize(p)} />
@@ -345,11 +459,11 @@ export const ItemView = ({
   );
 };
 
-type HandlePos = "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r";
+type HandlePos = HandlePosT;
 
-// Resize handle. 8 of them total: 4 corners + 4 edges. Edges resize one
-// dimension only (text width without changing height, etc.). Corner cursors
-// are diagonal, edge cursors are straight.
+// Resize handle: a large transparent hit area (stable cursor zone) with a small
+// visible dot centred inside. Anchored so the dot sits right on the item's
+// corner/edge. Edges resize one dimension; corners resize both.
 const Handle = ({
   pos,
   onPointerDown,
@@ -357,51 +471,58 @@ const Handle = ({
   pos: HandlePos;
   onPointerDown: (e: React.PointerEvent) => void;
 }) => {
-  const cornerCursors = {
-    tl: "nwse-resize",
-    br: "nwse-resize",
-    tr: "nesw-resize",
-    bl: "nesw-resize",
-    t: "ns-resize",
-    b: "ns-resize",
-    l: "ew-resize",
-    r: "ew-resize",
-  } as const;
-
   const isCorner = pos.length === 2;
-  const offset = -HANDLE_SIZE / 2 - 2;
+  // Selection ring is drawn at outline-offset 2px + 1px half-width = ~3px
+  // outside the box. Push the dot centre out by the same amount so the handles
+  // sit exactly on the visible ring instead of floating inside its corners.
+  const RING = 3;
+  const anchor = -HANDLE_HIT / 2 - RING;
 
-  const style: React.CSSProperties = {
+  const wrap: React.CSSProperties = {
     position: "absolute",
-    width: HANDLE_SIZE,
-    height: HANDLE_SIZE,
-    background: "var(--surface-2)",
-    border: "1.5px solid var(--selection)",
-    cursor: cornerCursors[pos],
+    width: HANDLE_HIT,
+    height: HANDLE_HIT,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: RESIZE_CURSORS[pos],
     // touchAction:none keeps the browser from intercepting pointer events on touch devices.
     touchAction: "none",
   };
 
-  // Anchor each handle. Edge handles centre on their side using transform.
   if (isCorner) {
-    if (pos.includes("t")) style.top = offset;
-    else style.bottom = offset;
-    if (pos.includes("l")) style.left = offset;
-    else style.right = offset;
+    if (pos.includes("t")) wrap.top = anchor;
+    else wrap.bottom = anchor;
+    if (pos.includes("l")) wrap.left = anchor;
+    else wrap.right = anchor;
+  } else if (pos === "t" || pos === "b") {
+    wrap.left = "50%";
+    wrap.transform = "translateX(-50%)";
+    if (pos === "t") wrap.top = anchor;
+    else wrap.bottom = anchor;
   } else {
-    if (pos === "t" || pos === "b") {
-      style.left = "50%";
-      style.transform = "translateX(-50%)";
-      if (pos === "t") style.top = offset;
-      else style.bottom = offset;
-    } else {
-      style.top = "50%";
-      style.transform = "translateY(-50%)";
-      if (pos === "l") style.left = offset;
-      else style.right = offset;
-    }
+    wrap.top = "50%";
+    wrap.transform = "translateY(-50%)";
+    if (pos === "l") wrap.left = anchor;
+    else wrap.right = anchor;
   }
-  return <div style={style} onPointerDown={onPointerDown} />;
+
+  return (
+    <div style={wrap} onPointerDown={onPointerDown}>
+      <div
+        className="cr-pop"
+        style={{
+          width: HANDLE_SIZE,
+          height: HANDLE_SIZE,
+          background: "var(--surface-2)",
+          border: "1.5px solid var(--selection)",
+          borderRadius: 3,
+          boxShadow: "0 1px 2px rgba(0, 0, 0, 0.18)",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
 };
 
 const ItemBody = ({
@@ -447,14 +568,151 @@ const ItemBody = ({
       );
     case "embed":
       return <EmbedBody item={item} interactive={interactive} />;
+    case "video":
+      return <VideoBody item={item} interactive={interactive} dispatch={dispatch} />;
     case "link":
       return <LinkBody item={item} selected={selected} />;
     case "drawing":
       return <DrawingBody item={item} />;
+    case "shape":
+      return (
+        <ShapeBody
+          item={item}
+          editing={editing}
+          setEditing={setEditing}
+          dispatch={dispatch}
+        />
+      );
     case "connector":
       // Connectors render in a dedicated SVG layer, not inside an item wrapper.
       return null;
   }
+};
+
+// Rectangle / ellipse / sticky note. Rect + ellipse are pure SVG fills. A note
+// is a filled card that also holds centered text — double-click to edit (a plain
+// textarea; the card size is fixed, so text wraps/clips instead of auto-growing).
+const ShapeBody = ({
+  item,
+  editing,
+  setEditing,
+  dispatch,
+}: {
+  item: Extract<Item, { type: "shape" }>;
+  editing: boolean;
+  setEditing: (v: boolean) => void;
+  dispatch: React.Dispatch<Action>;
+}) => {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (editing && taRef.current) {
+      const ta = taRef.current;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }, [editing]);
+
+  const geom = (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${item.w} ${item.h}`}
+      preserveAspectRatio="none"
+      style={{ display: "block", position: "absolute", inset: 0 }}
+    >
+      {item.shape === "ellipse" ? (
+        <ellipse
+          cx={item.w / 2}
+          cy={item.h / 2}
+          rx={Math.max(0, item.w / 2 - item.strokeWidth / 2)}
+          ry={Math.max(0, item.h / 2 - item.strokeWidth / 2)}
+          fill={item.fill}
+          stroke={item.stroke}
+          strokeWidth={item.strokeWidth}
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : (
+        <rect
+          x={item.strokeWidth / 2}
+          y={item.strokeWidth / 2}
+          width={Math.max(0, item.w - item.strokeWidth)}
+          height={Math.max(0, item.h - item.strokeWidth)}
+          rx={item.shape === "note" ? 6 : 0}
+          fill={item.fill}
+          stroke={item.stroke}
+          strokeWidth={item.strokeWidth}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+    </svg>
+  );
+
+  if (item.shape !== "note") return geom;
+
+  // Sticky note: geometry + centered text overlay.
+  const textStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    padding: 12,
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+    fontSize: item.fontSize ?? 16,
+    lineHeight: 1.3,
+    color: item.textColor ?? "#0a0a0a",
+    fontFamily: "inherit",
+    overflow: "hidden",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  };
+
+  return (
+    <>
+      {geom}
+      {editing ? (
+        <textarea
+          ref={taRef}
+          className="cr-note-input"
+          value={item.text ?? ""}
+          placeholder="Type…"
+          spellCheck
+          onChange={(e) =>
+            dispatch({
+              type: "updateItem",
+              id: item.id,
+              patch: { text: e.target.value } as Partial<Item>,
+            })
+          }
+          onBlur={() => setEditing(false)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) {
+              e.preventDefault();
+              taRef.current?.blur();
+            }
+          }}
+          style={{
+            ...textStyle,
+            background: "transparent",
+            border: "none",
+            outline: "none",
+            resize: "none",
+            cursor: "text",
+            // Match the view div's vertical centering so the text doesn't jump
+            // when entering/leaving edit. `align-content` centers a textarea's
+            // own content in modern browsers; older ones fall back to top.
+            display: "block",
+            alignContent: "center",
+            textAlignLast: "center",
+          }}
+        />
+      ) : (
+        <div style={{ ...textStyle, pointerEvents: "none" }}>{item.text}</div>
+      )}
+    </>
+  );
 };
 
 // Text items use a real <textarea> rather than contenteditable. Reasons:
@@ -540,6 +798,12 @@ const TextBody = ({
     }
   }, [editing]);
 
+  // Optional per-item styling (see TextItem). "transparent" bg drops the card
+  // chrome entirely for a clean floating-label look.
+  const transparentBg = item.bg === "transparent";
+  const background = item.bg === undefined ? "var(--surface-2)" : item.bg;
+  const border = transparentBg ? "1px solid transparent" : "1px solid var(--border)";
+
   // Shared font/box styling so the textarea and view div have the same metrics
   // (matters mostly for predictable wrapping when toggling edit/view).
   const baseStyle: React.CSSProperties = {
@@ -551,9 +815,10 @@ const TextBody = ({
     fontWeight: item.fontWeight ?? 400,
     lineHeight: 1.35,
     fontFamily: "inherit",
-    color: "var(--text)",
-    background: "var(--surface-2)",
-    border: "1px solid var(--border)",
+    textAlign: item.align ?? "left",
+    color: item.color ?? "var(--text)",
+    background,
+    border,
     boxSizing: "border-box",
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
@@ -564,10 +829,11 @@ const TextBody = ({
     return (
       <textarea
         ref={taRef}
+        className="cr-text-input"
         value={item.text}
         readOnly={false}
         tabIndex={0}
-        placeholder="Type… (markdown: **bold** _italic_ `code` # heading - bullet)"
+        placeholder="Type something…"
         spellCheck
         onChange={(e) =>
           dispatch({
@@ -897,7 +1163,11 @@ const DrawingBody = ({
   <svg
     width="100%"
     height="100%"
-    viewBox={`0 0 ${item.w} ${item.h}`}
+    // viewBox pinned to the authoring size (vw/vh), NOT the live w/h, so the
+    // strokes scale to fill the box on resize. preserveAspectRatio="none" lets
+    // the drawing stretch with the box (drawings resize freely, aspect unlocked).
+    viewBox={`0 0 ${item.vw ?? item.w} ${item.vh ?? item.h}`}
+    preserveAspectRatio="none"
     style={{ display: "block", overflow: "visible", pointerEvents: "none" }}
   >
     {item.strokes.map((s, i) => (
@@ -909,6 +1179,7 @@ const DrawingBody = ({
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
       />
     ))}
   </svg>

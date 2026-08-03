@@ -8,9 +8,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Action, State } from "./store";
+import { noteTextColor } from "./store";
 import type { Item, ItemDraft, Stroke } from "./types";
 import { ItemView } from "./Item";
 import { clampZoom, fitToBounds, screenToWorld, zoomAt } from "./coords";
+import { animateView, cancelViewAnim } from "./viewAnim";
 import { smoothPathD, thinPoints } from "./smooth";
 import type { Guide } from "./snap";
 
@@ -25,6 +27,27 @@ type Rect = { x: number; y: number; w: number; h: number };
 export const Canvas = ({ state, dispatch }: Props) => {
   const { board, selection, tool, editId, pen } = state;
   const containerRef = useRef<HTMLDivElement>(null);
+  // Latest committed view, read by keyboard-triggered camera tweens (their
+  // effect isn't re-subscribed on every pan, so board.view would be stale).
+  const viewRef = useRef(board.view);
+  viewRef.current = board.view;
+
+  // Smooth wheel/trackpad zoom. Each wheel tick nudges a target zoom; a rAF loop
+  // eases the actual zoom toward it (cursor-anchored), so zooming glides instead
+  // of snapping tick-to-tick. cancelZoom stops it when the user pans or a camera
+  // tween takes over.
+  const zoomAnimRef = useRef<{
+    target: number;
+    cursor: { x: number; y: number };
+    raf: number | null;
+  }>({ target: board.view.zoom, cursor: { x: 0, y: 0 }, raf: null });
+  const cancelZoom = () => {
+    const za = zoomAnimRef.current;
+    if (za.raf != null) {
+      cancelAnimationFrame(za.raf);
+      za.raf = null;
+    }
+  };
   const [spaceDown, setSpaceDown] = useState(false);
   const [panning, setPanning] = useState(false);
   const [marquee, setMarquee] = useState<Rect | null>(null);
@@ -52,6 +75,24 @@ export const Canvas = ({ state, dispatch }: Props) => {
     points: { x: number; y: number }[];
     color: string;
     width: number;
+  } | null>(null);
+
+  // Rubber-band preview while drawing a shape with the shape tool (world coords).
+  const [shapeDraft, setShapeDraft] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    kind: "rect" | "ellipse" | "note";
+  } | null>(null);
+
+  // Live "W × H" / position readout that follows the cursor during a
+  // resize/move. Set by Item.tsx (and MultiSelection) via callback; cleared on
+  // pointer-up. Rendered as a small HUD chip near the cursor.
+  const [measure, setMeasure] = useState<{
+    label: string;
+    x: number;
+    y: number;
   } | null>(null);
 
   // Snapshot the current selection ids as a stable array for ItemView so the
@@ -136,10 +177,12 @@ export const Canvas = ({ state, dispatch }: Props) => {
         return;
       }
 
-      // Reset / fit zoom.
+      // Reset / fit zoom. Glide the camera rather than snapping.
       if (mod && e.key === "0") {
         e.preventDefault();
-        dispatch({ type: "setView", view: { x: 0, y: 0, zoom: 1 } });
+        animateView(viewRef.current, { x: 0, y: 0, zoom: 1 }, (v) =>
+          dispatch({ type: "setView", view: v }),
+        );
         return;
       }
       if (mod && e.key === "1") {
@@ -147,10 +190,11 @@ export const Canvas = ({ state, dispatch }: Props) => {
         const el = containerRef.current;
         if (!el || state.board.items.length === 0) return;
         const r = el.getBoundingClientRect();
-        dispatch({
-          type: "setView",
-          view: fitToBounds(state.board.items, r.width, r.height),
-        });
+        animateView(
+          viewRef.current,
+          fitToBounds(state.board.items, r.width, r.height),
+          (v) => dispatch({ type: "setView", view: v }),
+        );
         return;
       }
 
@@ -163,10 +207,9 @@ export const Canvas = ({ state, dispatch }: Props) => {
         const r = el.getBoundingClientRect();
         const sel = state.board.items.filter((it) => selection.has(it.id));
         if (sel.length === 0) return;
-        dispatch({
-          type: "setView",
-          view: fitToBounds(sel, r.width, r.height),
-        });
+        animateView(viewRef.current, fitToBounds(sel, r.width, r.height), (v) =>
+          dispatch({ type: "setView", view: v }),
+        );
         return;
       }
 
@@ -221,28 +264,53 @@ export const Canvas = ({ state, dispatch }: Props) => {
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Direct input wins over any in-flight camera tween.
+      cancelViewAnim();
       const rect = el.getBoundingClientRect();
       const cursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
       if (e.ctrlKey || e.metaKey) {
-        const factor = Math.exp(-e.deltaY * 0.01);
-        const next = clampZoom(board.view.zoom * factor);
-        dispatch({ type: "setView", view: zoomAt(board.view, cursor, next) });
+        // Accumulate onto the running target (so fast ticks add up), then ease.
+        const za = zoomAnimRef.current;
+        const base = za.raf != null ? za.target : viewRef.current.zoom;
+        za.target = clampZoom(base * Math.exp(-e.deltaY * 0.01));
+        za.cursor = cursor;
+        if (za.raf == null) {
+          const step = () => {
+            const cur = viewRef.current;
+            const diff = za.target - cur.zoom;
+            if (Math.abs(diff) < 0.001) {
+              dispatch({ type: "setView", view: zoomAt(cur, za.cursor, za.target) });
+              za.raf = null;
+              return;
+            }
+            dispatch({
+              type: "setView",
+              view: zoomAt(cur, za.cursor, cur.zoom + diff * 0.35),
+            });
+            za.raf = requestAnimationFrame(step);
+          };
+          za.raf = requestAnimationFrame(step);
+        }
       } else {
+        cancelZoom();
+        const v = viewRef.current;
         dispatch({
           type: "setView",
-          view: {
-            ...board.view,
-            x: board.view.x - e.deltaX,
-            y: board.view.y - e.deltaY,
-          },
+          view: { ...v, x: v.x - e.deltaX, y: v.y - e.deltaY },
         });
       }
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [board.view, dispatch]);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      cancelZoom();
+    };
+    // viewRef.current keeps this handler reading the live view, so it never
+    // needs re-subscribing on pan/zoom — attach once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch]);
 
   const onCanvasPointerDown = (e: React.PointerEvent) => {
     if (!containerRef.current) return;
@@ -252,6 +320,8 @@ export const Canvas = ({ state, dispatch }: Props) => {
     // Pan: space held, or middle mouse, or right mouse.
     if (spaceDown || e.button === 1 || e.button === 2) {
       e.preventDefault();
+      cancelViewAnim();
+      cancelZoom();
       setPanning(true);
       const start = { x: e.clientX, y: e.clientY };
       const orig = { x: board.view.x, y: board.view.y };
@@ -320,6 +390,10 @@ export const Canvas = ({ state, dispatch }: Props) => {
               type: "connector",
               from: sourceId,
               to: targetId,
+              color: state.connector.color,
+              strokeWidth: state.connector.width,
+              shape: state.connector.shape,
+              ends: state.connector.ends,
               x: 0,
               y: 0,
               w: 0,
@@ -327,6 +401,76 @@ export const Canvas = ({ state, dispatch }: Props) => {
             },
           });
         }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      return;
+    }
+
+    if (tool === "shape") {
+      // Drag to draw a rectangle/ellipse/sticky note. A tiny drag (basically a
+      // click) drops one at a comfortable default size centered on the cursor.
+      e.preventDefault();
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      const startWorld = world;
+      let curWorld = world;
+      const s = state.shape;
+      const box = () => ({
+        x: Math.min(startWorld.x, curWorld.x),
+        y: Math.min(startWorld.y, curWorld.y),
+        w: Math.abs(curWorld.x - startWorld.x),
+        h: Math.abs(curWorld.y - startWorld.y),
+      });
+      setShapeDraft({ ...box(), kind: s.kind });
+      const onMove = (ev: PointerEvent) => {
+        const r = containerRef.current!.getBoundingClientRect();
+        curWorld = screenToWorld(
+          { x: ev.clientX - r.left, y: ev.clientY - r.top },
+          board.view,
+        );
+        setShapeDraft({ ...box(), kind: s.kind });
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        setShapeDraft(null);
+        let b = box();
+        if (b.w < 8 && b.h < 8) {
+          const dw = s.kind === "note" ? 180 : 160;
+          const dh = s.kind === "note" ? 130 : 110;
+          b = { x: startWorld.x - dw / 2, y: startWorld.y - dh / 2, w: dw, h: dh };
+        } else {
+          b = { ...b, w: Math.max(24, b.w), h: Math.max(24, b.h) };
+        }
+        const common = {
+          fill: s.fill,
+          stroke: s.stroke,
+          strokeWidth: s.strokeWidth,
+          x: b.x,
+          y: b.y,
+          w: b.w,
+          h: b.h,
+        };
+        if (s.kind === "note") {
+          dispatch({
+            type: "addItem",
+            edit: true,
+            item: {
+              type: "shape",
+              shape: "note",
+              ...common,
+              text: "",
+              textColor: noteTextColor(s.fill),
+              fontSize: 16,
+            },
+          });
+        } else {
+          dispatch({
+            type: "addItem",
+            item: { type: "shape", shape: s.kind, ...common },
+          });
+        }
+        if (!state.toolLocked) dispatch({ type: "setTool", tool: "select" });
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -508,12 +652,17 @@ export const Canvas = ({ state, dispatch }: Props) => {
     const d = smoothPathD(local);
 
     const stroke: Stroke = { d, strokeWidth: width, color };
+    const w = maxX - minX;
+    const h = maxY - minY;
     const drawing: ItemDraft = {
       type: "drawing",
       x: minX,
       y: minY,
-      w: maxX - minX,
-      h: maxY - minY,
+      w,
+      h,
+      // Pin the authoring size so resizing scales the strokes to fill the box.
+      vw: w,
+      vh: h,
       strokes: [stroke],
     };
     dispatch({ type: "addItem", item: drawing });
@@ -525,12 +674,39 @@ export const Canvas = ({ state, dispatch }: Props) => {
   else if (spaceDown) cursor = "grab";
   else if (tool === "pen") cursor = "crosshair";
   else if (tool === "connector") cursor = "crosshair";
+  else if (tool === "shape") cursor = "crosshair";
   else if (tool === "text") cursor = "text";
 
   return (
     <div
       ref={containerRef}
       onPointerDown={onCanvasPointerDown}
+      onDoubleClick={(e) => {
+        // Double-click empty canvas (select tool) drops a new text note right
+        // where you clicked, ready to type. Ignore double-clicks that land on
+        // an item — those have their own behaviour (edit text / engage embed).
+        if (tool !== "select") return;
+        if ((e.target as HTMLElement).closest("[data-item-id]")) return;
+        if (!containerRef.current) return;
+        const r = containerRef.current.getBoundingClientRect();
+        const w = screenToWorld(
+          { x: e.clientX - r.left, y: e.clientY - r.top },
+          board.view,
+        );
+        dispatch({
+          type: "addItem",
+          edit: true,
+          item: {
+            type: "text",
+            x: w.x - 110,
+            y: w.y - 24,
+            w: 220,
+            h: 80,
+            text: "",
+            fontSize: 16,
+          },
+        });
+      }}
       onContextMenu={(e) => e.preventDefault()}
       style={{
         position: "absolute",
@@ -583,6 +759,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
               selectedIds={selectedIds}
               onContextMenu={(itemId, x, y) => setCtxMenu({ itemId, x, y })}
               onSnapGuides={setSnapGuides}
+              onMeasure={setMeasure}
               dispatch={dispatch}
             />
           ))}
@@ -594,6 +771,7 @@ export const Canvas = ({ state, dispatch }: Props) => {
               (it) => selection.has(it.id) && it.type !== "connector",
             )}
             view={board.view}
+            onMeasure={setMeasure}
             dispatch={dispatch}
           />
         )}
@@ -618,6 +796,48 @@ export const Canvas = ({ state, dispatch }: Props) => {
               strokeLinecap="round"
               strokeLinejoin="round"
             />
+          </svg>
+        )}
+
+        {/* Shape-draw preview: dashed outline of the shape being dragged out. */}
+        {shapeDraft && (shapeDraft.w > 0 || shapeDraft.h > 0) && (
+          <svg
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              overflow: "visible",
+              pointerEvents: "none",
+            }}
+          >
+            {shapeDraft.kind === "ellipse" ? (
+              <ellipse
+                cx={shapeDraft.x + shapeDraft.w / 2}
+                cy={shapeDraft.y + shapeDraft.h / 2}
+                rx={shapeDraft.w / 2}
+                ry={shapeDraft.h / 2}
+                fill="var(--overlay-tint)"
+                stroke="var(--selection)"
+                strokeWidth={1}
+                strokeDasharray="4 3"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : (
+              <rect
+                x={shapeDraft.x}
+                y={shapeDraft.y}
+                width={shapeDraft.w}
+                height={shapeDraft.h}
+                rx={shapeDraft.kind === "note" ? 4 : 0}
+                fill="var(--overlay-tint)"
+                stroke="var(--selection)"
+                strokeWidth={1}
+                strokeDasharray="4 3"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
           </svg>
         )}
 
@@ -708,6 +928,16 @@ export const Canvas = ({ state, dispatch }: Props) => {
           close={() => setCtxMenu(null)}
         />
       )}
+
+      {/* Live dimension / position readout that trails the cursor mid-gesture. */}
+      {measure && (
+        <div
+          className="cr-measure"
+          style={{ left: measure.x + 16, top: measure.y + 18 }}
+        >
+          {measure.label}
+        </div>
+      )}
     </div>
   );
 };
@@ -746,6 +976,16 @@ const ConnectorLayer = ({
       it.type === "connector",
   );
 
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Re-routing a connector by dragging one of its endpoint handles onto another
+  // item. Only offered when a single connector is selected in the select tool.
+  const [rerouting, setRerouting] = useState<{
+    id: string;
+    end: "from" | "to";
+    cursor: { x: number; y: number }; // svg-space
+    hoverId: string | null;
+  } | null>(null);
+
   // Project a world point to screen pixels.
   const proj = (wx: number, wy: number) => ({
     x: wx * view.zoom + view.x,
@@ -780,8 +1020,69 @@ const ConnectorLayer = ({
     };
   })();
 
+  // The single selected connector, if any — gets draggable endpoint handles.
+  const selId = selection.size === 1 ? [...selection][0] : null;
+  const selectedConnector =
+    tool === "select"
+      ? connectors.find((c) => c.id === selId) ?? null
+      : null;
+
+  // Start dragging one end of a connector to re-attach it to another item.
+  // Reuses elementFromPoint hit-testing (same as drawing a new connector).
+  const startReroute = (
+    c: Extract<Item, { type: "connector" }>,
+    end: "from" | "to",
+    e: React.PointerEvent,
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const svg = svgRef.current;
+    if (!svg) return;
+    const toSvg = (cx: number, cy: number) => {
+      const r = svg.getBoundingClientRect();
+      return { x: cx - r.left, y: cy - r.top };
+    };
+    // The opposite end's item — attaching both ends to it would be a self-loop
+    // the reducer discards, so we never highlight or accept it as a target.
+    const otherId = end === "from" ? c.to : c.from;
+    const hitAt = (cx: number, cy: number) => {
+      const el = document
+        .elementFromPoint(cx, cy)
+        ?.closest?.("[data-item-id]") as HTMLElement | null;
+      const id = el?.getAttribute("data-item-id") ?? null;
+      return id && id !== otherId ? id : null;
+    };
+    setRerouting({ id: c.id, end, cursor: toSvg(e.clientX, e.clientY), hoverId: null });
+    const onMove = (ev: PointerEvent) => {
+      setRerouting({
+        id: c.id,
+        end,
+        cursor: toSvg(ev.clientX, ev.clientY),
+        hoverId: hitAt(ev.clientX, ev.clientY),
+      });
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const targetId = hitAt(ev.clientX, ev.clientY);
+      setRerouting(null);
+      const currentId = end === "from" ? c.from : c.to;
+      if (targetId && targetId !== currentId) {
+        dispatch({ type: "commitHistory" });
+        dispatch({
+          type: "updateItem",
+          id: c.id,
+          patch: { [end]: targetId } as Partial<Item>,
+        });
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   return (
     <svg
+      ref={svgRef}
       style={{
         position: "absolute",
         inset: 0,
@@ -792,6 +1093,8 @@ const ConnectorLayer = ({
       }}
     >
       <defs>
+        {/* auto-start-reverse lets one marker serve both ends: it flips at the
+            start so a "both ends" connector gets arrowheads pointing outward. */}
         <marker
           id="cr-arrow"
           markerUnits="userSpaceOnUse"
@@ -799,7 +1102,7 @@ const ConnectorLayer = ({
           markerHeight="14"
           refX="12"
           refY="7"
-          orient="auto"
+          orient="auto-start-reverse"
         >
           <path d="M 0 1 L 12 7 L 0 13 Z" fill="currentColor" />
         </marker>
@@ -810,7 +1113,7 @@ const ConnectorLayer = ({
           markerHeight="14"
           refX="12"
           refY="7"
-          orient="auto"
+          orient="auto-start-reverse"
         >
           <path d="M 0 1 L 12 7 L 0 13 Z" fill="var(--selection)" />
         </marker>
@@ -842,21 +1145,32 @@ const ConnectorLayer = ({
         if (!a || !b) return null;
         const { x1, y1, x2, y2 } = clippedScreen(a, b);
         const isSelected = selection.has(c.id);
+        const cw = c.strokeWidth ?? 1.75;
+        const d = connectorPath(c.shape ?? "straight", x1, y1, x2, y2);
+        const ends = c.ends ?? "one";
+        const marker = isSelected ? "url(#cr-arrow-active)" : "url(#cr-arrow)";
         return (
           <g
             key={c.id}
-            style={{ color: isSelected ? "var(--selection)" : "var(--text-2)" }}
+            style={{
+              color: isSelected
+                ? "var(--selection)"
+                : c.color ?? "var(--text-2)",
+              // Fade the line while its endpoint is being dragged; the dashed
+              // preview + handle show where it's headed.
+              opacity: rerouting?.id === c.id ? 0.4 : 1,
+            }}
           >
-            {/* Wide invisible "hit" line for easier clicking — only active in select mode. */}
-            <line
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
+            {/* Wide invisible "hit" path for easier clicking — only in select mode. */}
+            <path
+              d={d}
+              fill="none"
               stroke="transparent"
               strokeWidth={14}
               style={{
-                pointerEvents: tool === "select" ? "stroke" : "none",
+                // Suppressed during a reroute drag so the connector's own
+                // hit-path doesn't shadow the item under the cursor.
+                pointerEvents: tool === "select" && !rerouting ? "stroke" : "none",
                 cursor: "pointer",
               }}
               onPointerDown={(e) => {
@@ -868,21 +1182,85 @@ const ConnectorLayer = ({
                 );
               }}
             />
-            <line
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
+            <path
+              d={d}
+              fill="none"
               stroke="currentColor"
-              strokeWidth={isSelected ? 2.5 : 1.75}
-              markerEnd={
-                isSelected ? "url(#cr-arrow-active)" : "url(#cr-arrow)"
-              }
+              strokeWidth={isSelected ? cw + 0.9 : cw}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              markerEnd={ends === "none" ? undefined : marker}
+              markerStart={ends === "both" ? marker : undefined}
               style={{ pointerEvents: "none" }}
             />
           </g>
         );
       })}
+
+      {/* Endpoint handles for the selected connector — drag to re-attach. */}
+      {selectedConnector &&
+        (() => {
+          const a = byId.get(selectedConnector.from);
+          const b = byId.get(selectedConnector.to);
+          if (!a || !b) return null;
+          const { x1, y1, x2, y2 } = clippedScreen(a, b);
+          const isR = rerouting?.id === selectedConnector.id;
+          const fromPt =
+            isR && rerouting!.end === "from" ? rerouting!.cursor : { x: x1, y: y1 };
+          const toPt =
+            isR && rerouting!.end === "to" ? rerouting!.cursor : { x: x2, y: y2 };
+          // While dragging, preview a dashed line from the anchored item's
+          // centre to the cursor, and outline the item it would attach to.
+          const anchor = isR ? (rerouting!.end === "from" ? b : a) : null;
+          const anchorC = anchor
+            ? proj(anchor.x + anchor.w / 2, anchor.y + anchor.h / 2)
+            : null;
+          const hoverT = rerouting?.hoverId ? byId.get(rerouting.hoverId) : null;
+          return (
+            <>
+              {isR && anchorC && (
+                <line
+                  x1={anchorC.x}
+                  y1={anchorC.y}
+                  x2={rerouting!.cursor.x}
+                  y2={rerouting!.cursor.y}
+                  stroke="var(--selection)"
+                  strokeWidth={1.5}
+                  strokeDasharray="6 4"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
+              {hoverT && (
+                <rect
+                  x={proj(hoverT.x, hoverT.y).x - 2}
+                  y={proj(hoverT.x, hoverT.y).y - 2}
+                  width={hoverT.w * view.zoom + 4}
+                  height={hoverT.h * view.zoom + 4}
+                  fill="none"
+                  stroke="var(--selection)"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
+              {([["from", fromPt], ["to", toPt]] as const).map(([end, pt]) => (
+                <circle
+                  key={end}
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={5}
+                  fill="var(--bg)"
+                  stroke="var(--selection)"
+                  strokeWidth={1.5}
+                  // While dragging, the handle sits under the cursor — make it
+                  // click-through so elementFromPoint can see the item beneath.
+                  style={{ pointerEvents: isR ? "none" : "all", cursor: "grab" }}
+                  onPointerDown={(e) => startReroute(selectedConnector, end, e)}
+                />
+              ))}
+            </>
+          );
+        })()}
 
       {/* In-progress preview line (dashed). */}
       {previewLine && (
@@ -899,6 +1277,41 @@ const ConnectorLayer = ({
       )}
     </svg>
   );
+};
+
+// Build the SVG path "d" for a connector between two screen points, per shape:
+//   straight — a direct line
+//   curved   — a cubic bezier whose tangents leave each end along the dominant
+//              axis, so it bows smoothly (horizontal-ish links curve sideways)
+//   elbow    — a right-angle route that steps across the midpoint
+const connectorPath = (
+  shape: "straight" | "curved" | "elbow",
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): string => {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (shape === "curved") {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const cx1 = x1 + dx * 0.5;
+      const cx2 = x2 - dx * 0.5;
+      return `M ${x1} ${y1} C ${cx1} ${y1} ${cx2} ${y2} ${x2} ${y2}`;
+    }
+    const cy1 = y1 + dy * 0.5;
+    const cy2 = y2 - dy * 0.5;
+    return `M ${x1} ${y1} C ${x1} ${cy1} ${x2} ${cy2} ${x2} ${y2}`;
+  }
+  if (shape === "elbow") {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const mx = (x1 + x2) / 2;
+      return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+    }
+    const my = (y1 + y2) / 2;
+    return `M ${x1} ${y1} L ${x1} ${my} L ${x2} ${my} L ${x2} ${y2}`;
+  }
+  return `M ${x1} ${y1} L ${x2} ${y2}`;
 };
 
 // Cast a ray from a point inside an axis-aligned bbox toward a direction;
@@ -940,10 +1353,12 @@ const rayBoxExit = (
 const MultiSelection = ({
   items,
   view,
+  onMeasure,
   dispatch,
 }: {
   items: Item[];
   view: { x: number; y: number; zoom: number };
+  onMeasure: (m: { label: string; x: number; y: number } | null) => void;
   dispatch: React.Dispatch<Action>;
 }) => {
   if (items.length === 0) return null;
@@ -965,6 +1380,16 @@ const MultiSelection = ({
     e.stopPropagation();
     e.preventDefault();
     (e.target as Element).setPointerCapture?.(e.pointerId);
+
+    // Pin the resize cursor for the whole gesture (see Item.tsx for rationale).
+    const groupCursors: Record<HandlePosLong, string> = {
+      tl: "nwse-resize", br: "nwse-resize", tr: "nesw-resize", bl: "nesw-resize",
+      t: "ns-resize", b: "ns-resize", l: "ew-resize", r: "ew-resize",
+    };
+    const prevCursor = document.body.style.cursor;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.cursor = groupCursors[handle];
+    document.body.style.userSelect = "none";
 
     const left = handle.includes("l");
     const right = handle.includes("r");
@@ -1051,8 +1476,16 @@ const MultiSelection = ({
         return next;
       });
       dispatch({ type: "transformItems", transforms });
+      onMeasure({
+        label: `${Math.round(nw)} × ${Math.round(nh)}`,
+        x: ev.clientX,
+        y: ev.clientY,
+      });
     };
     const onUp = () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevSelect;
+      onMeasure(null);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -1105,40 +1538,57 @@ const GroupHandle = ({
     l: "ew-resize",
     r: "ew-resize",
   } as const;
-  const SIZE = 10;
-  const offset = -SIZE / 2 - 2;
+  const DOT = 10;
+  const HIT = 18; // large transparent hit area → stable cursor, no flicker
+  const RING = 3; // align dots onto the selection ring (outline-offset 2 + 1)
+  const anchor = -HIT / 2 - RING;
   const isCorner = pos.length === 2;
 
-  const style: React.CSSProperties = {
+  const wrap: React.CSSProperties = {
     position: "absolute",
-    width: SIZE,
-    height: SIZE,
-    background: "var(--surface-2)",
-    border: "1.5px solid var(--selection)",
+    width: HIT,
+    height: HIT,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     cursor: cursors[pos],
     pointerEvents: "auto",
     touchAction: "none",
   };
 
   if (isCorner) {
-    if (pos.includes("t")) style.top = offset;
-    else style.bottom = offset;
-    if (pos.includes("l")) style.left = offset;
-    else style.right = offset;
+    if (pos.includes("t")) wrap.top = anchor;
+    else wrap.bottom = anchor;
+    if (pos.includes("l")) wrap.left = anchor;
+    else wrap.right = anchor;
+  } else if (pos === "t" || pos === "b") {
+    wrap.left = "50%";
+    wrap.transform = "translateX(-50%)";
+    if (pos === "t") wrap.top = anchor;
+    else wrap.bottom = anchor;
   } else {
-    if (pos === "t" || pos === "b") {
-      style.left = "50%";
-      style.transform = "translateX(-50%)";
-      if (pos === "t") style.top = offset;
-      else style.bottom = offset;
-    } else {
-      style.top = "50%";
-      style.transform = "translateY(-50%)";
-      if (pos === "l") style.left = offset;
-      else style.right = offset;
-    }
+    wrap.top = "50%";
+    wrap.transform = "translateY(-50%)";
+    if (pos === "l") wrap.left = anchor;
+    else wrap.right = anchor;
   }
-  return <div style={style} onPointerDown={onPointerDown} />;
+
+  return (
+    <div style={wrap} onPointerDown={onPointerDown}>
+      <div
+        className="cr-pop"
+        style={{
+          width: DOT,
+          height: DOT,
+          background: "var(--surface-2)",
+          border: "1.5px solid var(--selection)",
+          borderRadius: 3,
+          boxShadow: "0 1px 2px rgba(0, 0, 0, 0.18)",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
 };
 
 // ---------- context menu ----------
@@ -1187,18 +1637,17 @@ const ContextMenu = ({
 
   return (
     <div
+      className="glass cr-menu"
       onMouseDown={(e) => e.stopPropagation()}
       style={{
         position: "fixed",
         left: x,
         top: y,
-        minWidth: 180,
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        boxShadow: "var(--shadow)",
-        padding: 4,
+        minWidth: 184,
+        padding: 6,
         zIndex: 2000,
         fontSize: 13,
+        transformOrigin: "top left",
       }}
     >
       <CtxItem onClick={run(() => dispatch({ type: "bringToFront", id: item.id }))} kbd="⌘]">
@@ -1254,6 +1703,7 @@ const CtxItem = ({
   kbd?: string;
 }) => (
   <button
+    className="chrome-btn"
     onClick={onClick}
     onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hover)")}
     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -1264,6 +1714,7 @@ const CtxItem = ({
       padding: "6px 10px",
       textAlign: "left",
       gap: 16,
+      borderRadius: "var(--radius-sm)",
     }}
   >
     <span style={{ flex: 1 }}>{children}</span>

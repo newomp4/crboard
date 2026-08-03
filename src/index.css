@@ -3,6 +3,26 @@
 @tailwind utilities;
 
 /*
+  Geist — self-hosted variable fonts (Vercel's official release, downloaded from
+  github.com/vercel/geist-font, not Google Fonts). One woff2 per family covers
+  every weight 100–900, so we get the whole range from a single ~70 KB file each.
+*/
+@font-face {
+  font-family: "Geist";
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
   Theme tokens. We swap them via data-theme="dark" on the <html> element. All
   components read these via inline style {{ background: 'var(--bg)' }} so a
   theme switch propagates instantly with no per-component logic.
@@ -25,6 +45,17 @@
   --overlay-tint: rgba(10, 10, 10, 0.06);
   --chrome-bg: rgba(255, 255, 255, 0.92);
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+
+  /* Frosted-glass material for floating chrome. --glass-bg is translucent so
+     the blur behind it actually shows; --glass-blur adds saturation so colors
+     bleeding through stay lively rather than grey. --glass-highlight is a
+     hairline top edge that reads as light catching the rim of real glass. */
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-blur: blur(22px) saturate(180%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.05), 0 14px 34px rgba(0, 0, 0, 0.13);
 }
 
 [data-theme="dark"] {
@@ -45,6 +76,13 @@
   --overlay-tint: rgba(250, 250, 250, 0.08);
   --chrome-bg: rgba(23, 23, 23, 0.92);
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+
+  --glass-bg: rgba(26, 26, 26, 0.58);
+  --glass-blur: blur(22px) saturate(180%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 34px rgba(0, 0, 0, 0.55);
 }
 
 html,
@@ -54,7 +92,7 @@ body,
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
+  font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -79,6 +117,147 @@ input,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* Placeholder polish. The browser default is a washed-out grey that reads cheap.
+   Text items get a soft, intentional muted-ink placeholder; sticky notes match
+   their own auto-contrast ink (so "Type…" is dark on a yellow note, never grey).
+   Firefox dims placeholders on its own, so opacity is pinned explicitly. */
+.cr-text-input::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+.cr-note-input::placeholder {
+  color: currentColor;
+  opacity: 0.5;
+}
+
+/* Frosted-glass panel. Floating chrome (toolbars, menus, option strips) opt in
+   with className="glass". Backgrounds/blur/shadow come from theme tokens so the
+   whole app shares one material and both themes stay in sync. */
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg), var(--glass-highlight);
+  border-radius: var(--radius);
+}
+
+/* Chrome buttons get a gentle radius + a quick, quiet hover/press response so
+   the UI feels responsive without drawing attention to itself. */
+.chrome-btn {
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease, transform 90ms ease, box-shadow 120ms ease;
+}
+.chrome-btn:active {
+  transform: scale(0.96);
+}
+
+/*
+  Motion. Everything animates ONLY transform + opacity (GPU-composited, no
+  layout/paint), runs 120–150ms, and eases out. Kept subtle on purpose. The
+  -cx variants preserve a translateX(-50%) centering baseline so horizontally
+  centered panels don't jump left mid-animation. Honors reduced-motion.
+*/
+@keyframes cr-pop {
+  from { opacity: 0; transform: scale(0.4); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes cr-modal {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes cr-menu {
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* Contextual panels (pen/connector/text/video) glide up from the toolbar — a
+   short, clean ease-out, no overshoot. The translate(-50%) is in every keyframe
+   so horizontal centering never drops mid-animation. */
+@keyframes cr-rise-cx {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes cr-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* New items settle in with a quick fade + slight scale. NO fill mode on
+   purpose: after it finishes the element reverts to its natural (un-transformed)
+   state, so a later inline transform — e.g. the text-resize scale preview — is
+   never overridden by a lingering animation fill. */
+@keyframes cr-item-in {
+  from { opacity: 0; transform: scale(0.965); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.cr-item-in { animation: cr-item-in 150ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Smooth ease-out (no bounce) everywhere for a calm, clean feel. */
+.cr-pop      { animation: cr-pop 140ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.cr-modal    { animation: cr-modal 160ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.cr-menu     { animation: cr-menu 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+               transform-origin: top; will-change: transform, opacity; }
+.cr-rise-cx  { animation: cr-rise-cx 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+               will-change: transform, opacity; }
+.cr-fade     { animation: cr-fade 160ms ease both; }
+
+/* Micro-interactions: color swatches and video trim handles pop on hover and
+   depress on press. Trim handles keep their translate(-50%,-50%) centering. */
+/* Bottom-toolbar active-tool indicator: a single pill that glides between the
+   tool buttons as the active tool changes (the buttons themselves are
+   transparent; this sits behind their icons). Snappy but soft ease. */
+.tool-pill {
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Live "W × H" / position tag that follows the cursor while resizing or moving
+   an item. Reads like a HUD readout — monospaced digits, quiet glass chip. */
+.cr-measure {
+  position: fixed;
+  z-index: 2100;
+  pointer-events: none;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+
+.cr-swatch {
+  transition: transform 110ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.cr-swatch:hover {
+  transform: scale(1.18);
+}
+.cr-swatch:active {
+  transform: scale(0.94);
+}
+.cr-trim-handle {
+  transition: transform 120ms cubic-bezier(0.34, 1.4, 0.5, 1),
+    box-shadow 120ms ease, border-color 120ms ease;
+}
+.cr-trim-handle:hover {
+  transform: translate(-50%, -50%) scale(1.28);
+  border-color: var(--selection);
+}
+.cr-trim-handle:active {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-pop, .cr-modal, .cr-menu, .cr-rise-cx, .cr-fade, .cr-item-in { animation: none; }
+  .chrome-btn, .cr-swatch, .cr-trim-handle, .tool-pill { transition: none; }
+  .chrome-btn:active, .cr-swatch:hover, .cr-swatch:active,
+  .cr-trim-handle:hover, .cr-trim-handle:active { transform: none; }
 }
 
 /* Subtle dotted background for the canvas — helps users feel motion when panning. */
@@ -189,7 +368,7 @@ img {
   line-height: 1.4;
 }
 .md-view code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--hover);
   padding: 0.05em 0.3em;
   border-radius: 2px;

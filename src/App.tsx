@@ -18,6 +18,12 @@ import {
 } from "./embeds";
 import { fileToDataUrl } from "./io";
 import {
+  fileVideoDraft,
+  MAX_INLINE_VIDEO_BYTES,
+  VIDEO_EXT,
+  videoFileMeta,
+} from "./video";
+import {
   backupFilename,
   isBackupSupported,
   loadSavedBackupDir,
@@ -440,6 +446,24 @@ const App = ({
         const items: ItemDraft[] = [];
         let i = 0;
         for (const f of Array.from(dt.files)) {
+          const at = { x: c.x + i * 24, y: c.y + i * 24 };
+          if (f.type.startsWith("video/") || VIDEO_EXT.test(f.name)) {
+            // Local video → trimmable, looping video item (data URL, like images).
+            if (f.size > MAX_INLINE_VIDEO_BYTES) {
+              const mb = (f.size / 1024 / 1024).toFixed(1);
+              if (
+                !confirm(
+                  `"${f.name}" is ${mb} MB. Large videos may not survive a reload (browser storage is limited). Drop it in anyway?`,
+                )
+              )
+                continue;
+            }
+            const src = await fileToDataUrl(f);
+            const meta = await videoFileMeta(src);
+            items.push(fileVideoDraft(src, f.name, at, meta));
+            i++;
+            continue;
+          }
           if (!f.type.startsWith("image/")) continue;
           const src = await fileToDataUrl(f);
           const dims = await imgSize(src);
@@ -511,7 +535,7 @@ const App = ({
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
         <div className="drop-overlay">
-          <span>Drop image to add to board</span>
+          <span>Drop image or video to add to board</span>
         </div>
       )}
       {bulkOpen && (
@@ -592,17 +616,15 @@ const SearchBar = ({
 
   return (
     <div
+      className="glass cr-menu"
       style={{
         position: "fixed",
-        top: 56,
-        right: 12,
+        top: 58,
+        right: 14,
         display: "flex",
         alignItems: "center",
         gap: 4,
-        padding: 4,
-        background: "var(--chrome-bg)",
-        border: "1px solid var(--border)",
-        backdropFilter: "blur(8px)",
+        padding: 6,
         zIndex: 1500,
         fontSize: 12,
       }}
@@ -724,6 +746,7 @@ const BulkImportModal = ({
 
   return (
     <div
+      className="cr-fade"
       onMouseDown={onClose}
       style={{
         position: "fixed",
@@ -737,12 +760,14 @@ const BulkImportModal = ({
       }}
     >
       <div
+        className="cr-modal"
         onMouseDown={(e) => e.stopPropagation()}
         style={{
           background: "var(--surface)",
           border: "1px solid var(--border)",
-          boxShadow: "var(--shadow)",
-          padding: 20,
+          boxShadow: "var(--shadow-lg)",
+          borderRadius: "var(--radius)",
+          padding: 22,
           minWidth: 480,
           maxWidth: 640,
           width: "100%",
@@ -779,7 +804,7 @@ const BulkImportModal = ({
             width: "100%",
             padding: 10,
             fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, monospace",
+              "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
             fontSize: 12,
             color: "var(--text)",
             background: "var(--surface-2)",
@@ -840,7 +865,10 @@ const EmptyHint = () => (
     }}
   >
     <div style={{ fontWeight: 600, color: "var(--text-3)" }}>Empty board</div>
-    <div>Paste a URL · drop an image · click a tool below</div>
+    <div>Drag in images, videos, or links — or paste a URL</div>
+    <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
+      …or pick a tool below to write and draw
+    </div>
   </div>
 );
 
@@ -861,12 +889,20 @@ const BoardViewer = ({ board, theme }: SharePayload) => {
 
   useEffect(() => {
     // Build the self-contained HTML and load it via a blob URL (no size limit,
-    // unlike the 1 MB cap on the srcdoc attribute).
-    const html = exportToHtml(board, theme);
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    setSrc(url);
-    return () => URL.revokeObjectURL(url);
+    // unlike the 1 MB cap on the srcdoc attribute). Async because the exporter
+    // inlines the fonts.
+    let url: string | null = null;
+    let cancelled = false;
+    exportToHtml(board, theme).then((html) => {
+      if (cancelled) return;
+      const blob = new Blob([html], { type: "text/html" });
+      url = URL.createObjectURL(blob);
+      setSrc(url);
+    });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
   }, [board, theme]);
 
   const dark = theme === "dark";

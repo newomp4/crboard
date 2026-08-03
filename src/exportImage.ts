@@ -16,6 +16,28 @@
 // thumbnail source and show a labelled placeholder card instead.
 
 import type { Board, EmbedItem, Item, Theme } from "./types";
+import geistUrl from "./fonts/Geist-Variable.woff2?url";
+
+// Load Geist once so canvas text renders in it (the 2D context can only use
+// fonts the document has actually loaded). Cached; falls back to system fonts
+// if it can't load, so an export never fails over a font.
+let geistLoad: Promise<void> | null = null;
+function ensureGeist(): Promise<void> {
+  if (!geistLoad) {
+    geistLoad = (async () => {
+      try {
+        const face = new FontFace("Geist", `url(${geistUrl}) format("woff2")`, {
+          weight: "100 900",
+        });
+        await face.load();
+        document.fonts.add(face);
+      } catch {
+        /* system-font fallback */
+      }
+    })();
+  }
+  return geistLoad;
+}
 
 const PADDING = 80;   // world-unit border around all content
 const BASE_SCALE = 3; // world units → canvas pixels
@@ -143,7 +165,7 @@ function themeColors(theme: Theme): Colors {
   };
 }
 
-const FONT = "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+const FONT = "'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
 
 // ── Inline markdown → runs ───────────────────────────────────────────────────
 
@@ -189,11 +211,18 @@ function renderTextItem(
   const x = wx(it.x), y = wy(it.y);
   const w = it.w * scale, h = it.h * scale;
 
-  ctx.fillStyle = colors.surface;
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = colors.border;
-  ctx.lineWidth = Math.max(0.5, scale * 0.5);
-  ctx.strokeRect(x, y, w, h);
+  // Note fill: default surface card, a custom highlight, or none ("transparent"
+  // drops both fill and border for the floating-label look).
+  if (it.bg !== "transparent") {
+    ctx.fillStyle = it.bg || colors.surface;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = colors.border;
+    ctx.lineWidth = Math.max(0.5, scale * 0.5);
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  // Ink color: custom if set, else the theme foreground.
+  const ink = it.color || colors.text;
 
   const pad    = 12 * scale;
   const baseFz = (it.fontSize || 16) * scale;
@@ -206,42 +235,155 @@ function renderTextItem(
   ctx.rect(x, y, w, h);
   ctx.clip();
 
+  const maxX = x + w - pad;
   let curY = y + pad;
+
+  // Draw a run of styled words with word-wrapping. On-screen the text box uses
+  // CSS `pre-wrap`/`break-word`, so a long paragraph flows onto multiple lines.
+  // The old exporter drew each source line as one straight fillText and let the
+  // clip region chop off anything past the edge — text that looked fine on the
+  // board came out truncated in the PNG. Here we lay words out one at a time and
+  // wrap to the next row when the next word would cross maxX, matching the board.
+  const drawWrapped = (
+    runs: Run[],
+    fz: number,
+    startX: number,
+    weight: number,
+  ) => {
+    let curX = startX;
+    let rowUsed = false; // has anything been drawn on the current visual row?
+    for (const run of runs) {
+      const wt = run.bold ? Math.max(weight, 700) : weight;
+      const font = `${run.italic ? "italic " : ""}${wt} ${fz}px ${FONT}`;
+      // Split on whitespace but keep the gaps so inter-word spacing survives.
+      for (const token of run.text.split(/(\s+)/)) {
+        if (token === "") continue;
+        ctx.font = font;
+        if (/^\s+$/.test(token)) {
+          if (rowUsed) curX += ctx.measureText(" ").width;
+          continue;
+        }
+        const tw = ctx.measureText(token).width;
+        if (rowUsed && curX + tw > maxX) {
+          curY += fz * lh; // wrap
+          curX = startX;
+          rowUsed = false;
+          if (curY > y + h) return; // past the box — clip handles the rest
+        }
+        ctx.fillStyle = ink;
+        ctx.fillText(token, curX, curY + fz * 0.8);
+        curX += tw;
+        rowUsed = true;
+      }
+    }
+    curY += fz * lh;
+  };
+
   for (const line of (it.text || "").split("\n")) {
+    if (curY > y + h) break;
     const hm = line.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
       const fz = baseFz * MULT[Math.min(hm[1].length, 6) - 1];
-      ctx.font = `bold ${fz}px ${FONT}`;
-      ctx.fillStyle = colors.text;
-      ctx.fillText(hm[2].replace(/\*\*|__|~~|\*|_|`/g, ""), x + pad, curY + fz * 0.8);
-      curY += fz * lh;
-    } else {
-      const ulm = /^[-*]\s+(.*)/.exec(line);
-      const olm = /^(\d+)\.\s+(.*)/.exec(line);
-      const content = ulm ? ulm[1] : olm ? olm[2] : line;
-      const prefix  = ulm ? "•" : olm ? `${olm[1]}.` : null;
-      const indent  = prefix ? 18 * scale : 0;
-      const fz      = baseFz;
-
-      if (prefix) {
-        ctx.font = `${baseW} ${fz}px ${FONT}`;
-        ctx.fillStyle = colors.text;
-        ctx.fillText(prefix, x + pad, curY + fz * 0.8);
-      }
-
-      let curX = x + pad + indent;
-      for (const run of parseInline(content)) {
-        const wt = run.bold ? Math.max(baseW, 700) : baseW;
-        ctx.font = `${run.italic ? "italic " : ""}${wt} ${fz}px ${FONT}`;
-        ctx.fillStyle = colors.text;
-        if (run.text) {
-          ctx.fillText(run.text, curX, curY + fz * 0.8);
-          curX += ctx.measureText(run.text).width;
-        }
-      }
-      curY += fz * lh;
+      const clean = hm[2].replace(/\*\*|__|~~|\*|_|`/g, "");
+      drawWrapped([{ text: clean, bold: true, italic: false }], fz, x + pad, 700);
+      continue;
     }
-    if (curY > y + h) break;
+    const ulm = /^[-*]\s+(.*)/.exec(line);
+    const olm = /^(\d+)\.\s+(.*)/.exec(line);
+    const content = ulm ? ulm[1] : olm ? olm[2] : line;
+    const prefix  = ulm ? "•" : olm ? `${olm[1]}.` : null;
+    const indent  = prefix ? 18 * scale : 0;
+
+    if (prefix) {
+      ctx.font = `${baseW} ${baseFz}px ${FONT}`;
+      ctx.fillStyle = ink;
+      ctx.fillText(prefix, x + pad, curY + baseFz * 0.8);
+    }
+    if (content === "") {
+      curY += baseFz * lh; // blank line → one empty row
+      continue;
+    }
+    drawWrapped(parseInline(content), baseFz, x + pad + indent, baseW);
+  }
+  ctx.restore();
+}
+
+// Rectangle / ellipse / sticky note. Rect + ellipse are a fill + optional
+// stroke; a note additionally centers its text (word-wrapped, clipped to the box).
+function renderShapeItem(
+  ctx: CanvasRenderingContext2D,
+  it: Extract<Item, { type: "shape" }>,
+  wx: (x: number) => number,
+  wy: (y: number) => number,
+  scale: number,
+) {
+  const x = wx(it.x), y = wy(it.y);
+  const w = it.w * scale, h = it.h * scale;
+  const sw = (it.strokeWidth || 0) * scale;
+  const hasFill = it.fill !== "transparent";
+  const hasStroke = it.stroke !== "transparent" && sw > 0;
+
+  ctx.save();
+  if (it.shape === "ellipse") {
+    ctx.beginPath();
+    ctx.ellipse(
+      x + w / 2, y + h / 2,
+      Math.max(0, w / 2 - sw / 2), Math.max(0, h / 2 - sw / 2),
+      0, 0, Math.PI * 2,
+    );
+  } else {
+    const r = it.shape === "note" ? Math.min(6 * scale, w / 2, h / 2) : 0;
+    ctx.beginPath();
+    ctx.roundRect(
+      x + sw / 2, y + sw / 2,
+      Math.max(0, w - sw), Math.max(0, h - sw),
+      r,
+    );
+  }
+  if (hasFill) { ctx.fillStyle = it.fill; ctx.fill(); }
+  if (hasStroke) { ctx.strokeStyle = it.stroke; ctx.lineWidth = sw; ctx.stroke(); }
+  ctx.restore();
+
+  if (it.shape !== "note" || !it.text) return;
+
+  // Centered note text.
+  const pad = 12 * scale;
+  const fz = (it.fontSize || 16) * scale;
+  const lh = fz * 1.3;
+  const maxW = Math.max(0, w - pad * 2);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.font = `400 ${fz}px ${FONT}`;
+  ctx.fillStyle = it.textColor || "#0a0a0a";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // Word-wrap each hard line to the box width.
+  const lines: string[] = [];
+  for (const para of it.text.split("\n")) {
+    if (para === "") { lines.push(""); continue; }
+    let cur = "";
+    for (const word of para.split(/\s+/)) {
+      const trial = cur ? cur + " " + word : word;
+      if (cur && ctx.measureText(trial).width > maxW) {
+        lines.push(cur);
+        cur = word;
+      } else {
+        cur = trial;
+      }
+    }
+    lines.push(cur);
+  }
+
+  const blockH = lines.length * lh;
+  let cy = y + h / 2 - blockH / 2 + fz * 0.8;
+  const cx = x + w / 2;
+  for (const line of lines) {
+    ctx.fillText(line, cx, cy);
+    cy += lh;
   }
   ctx.restore();
 }
@@ -279,6 +421,60 @@ function renderLinkItem(
   ctx.font = `400 ${urlFz}px ${FONT}`;
   ctx.fillStyle = colors.text3;
   ctx.fillText(it.url, x + pad, startY + titleFz + 4 * scale + urlFz * 0.85, w - pad * 2);
+}
+
+// Videos can't be rasterised live any more than embeds can, so the PNG shows a
+// still: YouTube gets its real thumbnail, local files get a black frame. Both
+// get a play badge + a footer label so the export reads as "video here".
+function renderVideoItem(
+  ctx: CanvasRenderingContext2D,
+  it: Extract<Item, { type: "video" }>,
+  wx: (x: number) => number,
+  wy: (y: number) => number,
+  scale: number,
+  colors: Colors,
+  thumbnail: HTMLImageElement | null,
+) {
+  const x = wx(it.x), y = wy(it.y);
+  const w = it.w * scale, h = it.h * scale;
+  const footerH = Math.min(28 * scale, h * 0.2);
+  const mediaH = h - footerH;
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, w, mediaH); ctx.clip();
+  ctx.fillStyle = "#000";
+  ctx.fillRect(x, y, w, mediaH);
+  if (thumbnail) drawImageCover(ctx, thumbnail, x, y, w, mediaH);
+  ctx.restore();
+
+  // Play badge: white triangle in a translucent disc, centred on the media area.
+  const cx = x + w / 2, cy = y + mediaH / 2;
+  const r = Math.max(10, Math.min(w, mediaH) * 0.12);
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  const t = r * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - t * 0.55, cy - t);
+  ctx.lineTo(cx - t * 0.55, cy + t);
+  ctx.lineTo(cx + t, cy);
+  ctx.closePath(); ctx.fill();
+
+  // Footer strip with a label.
+  ctx.fillStyle = colors.surface;
+  ctx.fillRect(x, y + mediaH, w, footerH);
+  ctx.strokeStyle = colors.border;
+  ctx.lineWidth = Math.max(0.5, scale * 0.5);
+  ctx.strokeRect(x, y, w, h);
+  ctx.beginPath();
+  ctx.moveTo(x, y + mediaH); ctx.lineTo(x + w, y + mediaH); ctx.stroke();
+
+  const fz = Math.min(11 * scale, footerH * 0.5);
+  const pad = 10 * scale;
+  ctx.font = `500 ${fz}px ${FONT}`;
+  ctx.fillStyle = colors.text;
+  const label = it.kind === "youtube" ? "YouTube" : it.fileName || "Video";
+  ctx.fillText(label, x + pad, y + mediaH + footerH / 2 + fz * 0.35, w - pad * 2);
 }
 
 // Draw image covering the destination rect (object-fit: cover).
@@ -388,6 +584,50 @@ function renderDrawingItem(
   ctx.restore();
 }
 
+// SVG path "d" for a connector — mirrors connectorPath in src/Canvas.tsx so the
+// PNG matches the canvas (shape is scale-free, computed on the projected points).
+function connectorPathD(
+  shape: string, x1: number, y1: number, x2: number, y2: number,
+): string {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (shape === "curved") {
+    if (Math.abs(dx) >= Math.abs(dy))
+      return `M ${x1} ${y1} C ${x1 + dx * 0.5} ${y1} ${x2 - dx * 0.5} ${y2} ${x2} ${y2}`;
+    return `M ${x1} ${y1} C ${x1} ${y1 + dy * 0.5} ${x2} ${y2 - dy * 0.5} ${x2} ${y2}`;
+  }
+  if (shape === "elbow") {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const mx = (x1 + x2) / 2;
+      return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+    }
+    const my = (y1 + y2) / 2;
+    return `M ${x1} ${y1} L ${x1} ${my} L ${x2} ${my} L ${x2} ${y2}`;
+  }
+  return `M ${x1} ${y1} L ${x2} ${y2}`;
+}
+
+// Tangent directions at each endpoint (radians), so arrowheads point along the
+// path — outward at the start, toward the tip at the end.
+function connectorEndAngles(
+  shape: string, x1: number, y1: number, x2: number, y2: number,
+): { endAngle: number; startAngle: number } {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (shape === "curved") {
+    if (Math.abs(dx) >= Math.abs(dy))
+      return { endAngle: Math.atan2(0, dx * 0.5), startAngle: Math.atan2(0, -dx * 0.5) };
+    return { endAngle: Math.atan2(dy * 0.5, 0), startAngle: Math.atan2(-dy * 0.5, 0) };
+  }
+  if (shape === "elbow") {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const mx = (x1 + x2) / 2;
+      return { endAngle: Math.atan2(0, x2 - mx), startAngle: Math.atan2(0, x1 - mx) };
+    }
+    const my = (y1 + y2) / 2;
+    return { endAngle: Math.atan2(y2 - my, 0), startAngle: Math.atan2(y1 - my, 0) };
+  }
+  return { endAngle: Math.atan2(dy, dx), startAngle: Math.atan2(-dy, -dx) };
+}
+
 function renderConnectorsLayer(
   ctx: CanvasRenderingContext2D,
   items: Item[],
@@ -397,10 +637,8 @@ function renderConnectorsLayer(
   scale: number,
   colors: Colors,
 ) {
-  ctx.strokeStyle = colors.text2;
-  ctx.fillStyle   = colors.text2;
-  ctx.lineWidth   = 1.75 * scale;
-  ctx.lineCap     = "round";
+  ctx.lineJoin = "round";
+  ctx.lineCap  = "round";
 
   for (const it of items) {
     if (it.type !== "connector") continue;
@@ -416,20 +654,28 @@ function renderConnectorsLayer(
     const x1 = wx(e1.x), y1 = wy(e1.y);
     const x2 = wx(e2.x), y2 = wy(e2.y);
 
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+    const shape = it.shape ?? "straight";
+    const ends  = it.ends ?? "one";
+    const cw    = it.strokeWidth ?? 1.75;
 
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-    const aLen  = 7 * scale;
-    const aAng  = Math.PI / 6;
-    ctx.beginPath();
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(x2 - aLen * Math.cos(angle - aAng), y2 - aLen * Math.sin(angle - aAng));
-    ctx.lineTo(x2 - aLen * Math.cos(angle + aAng), y2 - aLen * Math.sin(angle + aAng));
-    ctx.closePath();
-    ctx.fill();
+    ctx.strokeStyle = it.color ?? colors.text2;
+    ctx.fillStyle   = it.color ?? colors.text2;
+    ctx.lineWidth   = cw * scale;
+    ctx.stroke(new Path2D(connectorPathD(shape, x1, y1, x2, y2)));
+
+    const { endAngle, startAngle } = connectorEndAngles(shape, x1, y1, x2, y2);
+    const aLen = Math.max(6, 4 + cw * 1.6) * scale;
+    const aAng = Math.PI / 6;
+    const head = (tx: number, ty: number, ang: number) => {
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx - aLen * Math.cos(ang - aAng), ty - aLen * Math.sin(ang - aAng));
+      ctx.lineTo(tx - aLen * Math.cos(ang + aAng), ty - aLen * Math.sin(ang + aAng));
+      ctx.closePath();
+      ctx.fill();
+    };
+    if (ends !== "none") head(x2, y2, endAngle);
+    if (ends === "both") head(x1, y1, startAngle);
   }
 }
 
@@ -474,9 +720,16 @@ export async function downloadImage(board: Board, theme: Theme = "light") {
   const regularImages = sorted.filter(
     (it): it is Extract<Item, { type: "image" }> => it.type === "image",
   );
+  const youtubeVideos = sorted.filter(
+    (it): it is Extract<Item, { type: "video" }> =>
+      it.type === "video" && it.kind === "youtube",
+  );
 
-  // Fetch embed thumbnails and load regular images in parallel.
-  const [embedThumbnails, imageCache] = await Promise.all([
+  // Fetch embed + video thumbnails and load regular images in parallel.
+  // Kick off font loading in parallel with the image/thumbnail fetches.
+  const fontReady = ensureGeist();
+
+  const [embedThumbnails, imageCache, videoThumbnails] = await Promise.all([
     // For each embed, try to get a real thumbnail; gracefully fall back to null.
     Promise.all(
       embedItems.map(async (it) => {
@@ -493,7 +746,19 @@ export async function downloadImage(board: Board, theme: Theme = "light") {
         return [it.src, img] as [string, HTMLImageElement | null];
       }),
     ).then((entries) => new Map(entries)),
+
+    // YouTube videos: use the CDN poster frame (no auth/CORS issues).
+    Promise.all(
+      youtubeVideos.map(async (it) => {
+        const img = it.youtubeId
+          ? await loadImage(`https://img.youtube.com/vi/${it.youtubeId}/hqdefault.jpg`)
+          : null;
+        return [it.id, img] as [string, HTMLImageElement | null];
+      }),
+    ).then((entries) => new Map(entries)),
   ]);
+
+  await fontReady;
 
   // Render items in z-order; connectors go on top of everything.
   for (const it of sorted) {
@@ -505,12 +770,19 @@ export async function downloadImage(board: Board, theme: Theme = "light") {
       if (img) ctx.drawImage(img, wx(it.x), wy(it.y), it.w * scale, it.h * scale);
     } else if (it.type === "drawing") {
       renderDrawingItem(ctx, it, wx, wy, scale);
+    } else if (it.type === "shape") {
+      renderShapeItem(ctx, it, wx, wy, scale);
     } else if (it.type === "link") {
       renderLinkItem(ctx, it, wx, wy, scale, colors);
     } else if (it.type === "embed") {
       renderEmbedItem(
         ctx, it, wx, wy, scale, colors,
         embedThumbnails.get(it.id) ?? null,
+      );
+    } else if (it.type === "video") {
+      renderVideoItem(
+        ctx, it, wx, wy, scale, colors,
+        videoThumbnails.get(it.id) ?? null,
       );
     }
   }

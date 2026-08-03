@@ -23,6 +23,38 @@ export type PenStyle = {
   width: number;
 };
 
+// Connectors share the pen's shape (color + width) so their options panel can
+// mirror the pen's. Kept as its own style so changing one doesn't change the other.
+export type ConnectorStyle = {
+  color: string;
+  width: number;
+  shape: "straight" | "curved" | "elbow";
+  ends: "one" | "both" | "none";
+};
+
+// Defaults the shape tool draws with: which primitive, and its fill/stroke.
+export type ShapeStyle = {
+  kind: "rect" | "ellipse" | "note";
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+};
+
+// Sticky-note default fill; text auto-contrasts against it.
+export const NOTE_FILL = "#ffd54a";
+
+// Pick black or white note text based on the fill's luminance, so a note stays
+// readable whatever color you give it.
+export const noteTextColor = (fill: string): string => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(fill.trim().replace(/^#/, ""));
+  if (!m) return "#0a0a0a";
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 140 ? "#0a0a0a" : "#fafafa";
+};
+
 export type State = {
   board: Board;
   past: Board[];
@@ -38,6 +70,8 @@ export type State = {
   // double-click).
   editId: string | null;
   pen: PenStyle;
+  connector: ConnectorStyle;
+  shape: ShapeStyle;
   theme: Theme;
 };
 
@@ -73,6 +107,8 @@ export type Action =
   | { type: "bringToFront"; id: string }
   | { type: "sendToBack"; id: string }
   | { type: "setPen"; patch: Partial<PenStyle> }
+  | { type: "setConnector"; patch: Partial<ConnectorStyle> }
+  | { type: "setShape"; patch: Partial<ShapeStyle> }
   | { type: "loadBoard"; board: Board }
   | { type: "newBoard" }
   | { type: "commitHistory" } // snapshot current board for an upcoming drag
@@ -307,6 +343,10 @@ const apply = (state: State, action: Action): State => {
     }
     case "setPen":
       return { ...state, pen: { ...state.pen, ...action.patch } };
+    case "setConnector":
+      return { ...state, connector: { ...state.connector, ...action.patch } };
+    case "setShape":
+      return { ...state, shape: { ...state.shape, ...action.patch } };
     case "loadBoard":
       return {
         ...state,
@@ -322,16 +362,43 @@ const apply = (state: State, action: Action): State => {
     case "setEditId":
       return { ...state, editId: action.id };
     case "setTheme": {
-      // When switching themes, swap the pen color too if it's currently the
-      // theme-default. (User may have manually picked a custom shade — leave
-      // those alone.)
-      let pen = state.pen;
-      if (action.theme === "dark" && state.pen.color === "#0a0a0a") {
-        pen = { ...state.pen, color: "#fafafa" };
-      } else if (action.theme === "light" && state.pen.color === "#fafafa") {
-        pen = { ...state.pen, color: "#0a0a0a" };
+      // "Ink" is the theme's foreground: black on light, white on dark. Flip it
+      // so anything drawn in ink follows the theme — flick the switch and black
+      // ink becomes white and vice versa. Named colors (red/blue/…) stay put.
+      const oldInk = state.theme === "dark" ? "#fafafa" : "#0a0a0a";
+      const newInk = action.theme === "dark" ? "#fafafa" : "#0a0a0a";
+      const swapInk = (color: string) => (color === oldInk ? newInk : color);
+
+      const pen = { ...state.pen, color: swapInk(state.pen.color) };
+      const connector = {
+        ...state.connector,
+        color: swapInk(state.connector.color),
+      };
+
+      // Repaint existing ink strokes + ink connectors already on the board.
+      let board = state.board;
+      if (oldInk !== newInk) {
+        const items = state.board.items.map((it): Item => {
+          if (it.type === "drawing") {
+            let changed = false;
+            const strokes = it.strokes.map((s) => {
+              if (s.color === oldInk) {
+                changed = true;
+                return { ...s, color: newInk };
+              }
+              return s;
+            });
+            return changed ? { ...it, strokes } : it;
+          }
+          if (it.type === "connector" && it.color === oldInk) {
+            return { ...it, color: newInk };
+          }
+          return it;
+        });
+        board = { ...state.board, items };
       }
-      return { ...state, theme: action.theme, pen };
+
+      return { ...state, theme: action.theme, pen, connector, board };
     }
     // History actions handled in the wrapping reducer.
     case "commitHistory":
@@ -415,6 +482,8 @@ const loadInitial = (): State => {
     toolLocked: false,
     editId: null,
     pen: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 2 },
+    connector: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 1.75, shape: "straight", ends: "one" },
+    shape: { kind: "note", fill: NOTE_FILL, stroke: "transparent", strokeWidth: 2 },
     theme,
   };
   try {
@@ -436,6 +505,9 @@ export type SaveStatus = {
   savedAt: number | null;
   // True between a board change and the next successful save.
   pending: boolean;
+  // The last save attempt threw (storage full, private mode, etc.). While true,
+  // the user's recent changes are NOT persisted — surfaced prominently in the UI.
+  failed: boolean;
 };
 
 export const useStore = (boardId?: string, initialBoard?: Board) => {
@@ -452,6 +524,18 @@ export const useStore = (boardId?: string, initialBoard?: Board) => {
         toolLocked: false,
         editId: null,
         pen: { color: theme === "dark" ? "#fafafa" : "#0a0a0a", width: 2 },
+        connector: {
+          color: theme === "dark" ? "#fafafa" : "#0a0a0a",
+          width: 1.75,
+          shape: "straight" as const,
+          ends: "one" as const,
+        },
+        shape: {
+          kind: "note" as const,
+          fill: NOTE_FILL,
+          stroke: "transparent",
+          strokeWidth: 2,
+        },
         theme,
       };
     }
@@ -460,6 +544,7 @@ export const useStore = (boardId?: string, initialBoard?: Board) => {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({
     savedAt: null,
     pending: false,
+    failed: false,
   });
 
   // Debounced autosave. Saves to the board's own slot when a boardId is
@@ -473,9 +558,9 @@ export const useStore = (boardId?: string, initialBoard?: Board) => {
         } else {
           localStorage.setItem("crboard:current", JSON.stringify(state.board));
         }
-        setSaveStatus({ savedAt: Date.now(), pending: false });
+        setSaveStatus({ savedAt: Date.now(), pending: false, failed: false });
       } catch {
-        setSaveStatus((s) => ({ ...s, pending: false }));
+        setSaveStatus((s) => ({ ...s, pending: false, failed: true }));
       }
     }, 250);
     return () => clearTimeout(t);

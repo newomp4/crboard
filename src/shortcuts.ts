@@ -1,4 +1,4 @@
-// Tool-mode keyboard shortcuts (V / T / P).
+// Tool-mode keyboard shortcuts (V / T / P / C / S).
 // Lives outside Toolbar.tsx so React Fast Refresh stays happy — files that
 // export both components and hooks fall out of the HMR fast path.
 
@@ -24,6 +24,8 @@ export const useToolShortcuts = (dispatch: React.Dispatch<Action>) => {
         dispatch({ type: "setTool", tool: "pen" });
       if (e.key === "c" || e.key === "C")
         dispatch({ type: "setTool", tool: "connector" });
+      if (e.key === "s" || e.key === "S")
+        dispatch({ type: "setTool", tool: "shape" });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

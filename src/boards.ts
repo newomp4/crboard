@@ -11,13 +11,46 @@ import { nanoid } from "nanoid";
 import type { Board } from "./types";
 import { emptyBoard } from "./types";
 
+// A tiny schematic of the board for the home-screen preview: each item as a
+// normalized rectangle (0..1) plus a one-letter type code for coloring. No
+// pixels, no image data — just geometry, so it's cheap to store and render.
+export type ThumbRect = { x: number; y: number; w: number; h: number; t: string };
+export type BoardThumb = { r: ThumbRect[]; w: number; h: number };
+
 export type BoardMeta = {
   id: string;
   name: string;
   createdAt: number;
   updatedAt: number;
   itemCount: number;
+  thumb?: BoardThumb;
 };
+
+// Build the schematic from a board. Normalizes every item into the content
+// bounding box using a single scale (so proportions are preserved), caps the
+// count to keep the payload tiny, and drops connectors (they're lines).
+export function computeThumb(board: Board): BoardThumb {
+  const items = board.items.filter((it) => it.type !== "connector");
+  if (items.length === 0) return { r: [], w: 1, h: 1 };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const it of items) {
+    minX = Math.min(minX, it.x);
+    minY = Math.min(minY, it.y);
+    maxX = Math.max(maxX, it.x + it.w);
+    maxY = Math.max(maxY, it.y + it.h);
+  }
+  const W = Math.max(1, maxX - minX);
+  const H = Math.max(1, maxY - minY);
+  const S = Math.max(W, H);
+  const r = items.slice(0, 80).map((it) => ({
+    x: (it.x - minX) / S,
+    y: (it.y - minY) / S,
+    w: Math.max(0.004, it.w / S),
+    h: Math.max(0.004, it.h / S),
+    t: it.type[0], // t/i/e/v/l/d
+  }));
+  return { r, w: W / S, h: H / S };
+}
 
 const INDEX_KEY = "crboard:boards";
 const LEGACY_KEY = "crboard:current";
@@ -33,6 +66,30 @@ export function listBoards(): BoardMeta[] {
   return [];
 }
 
+// Backfill thumbnails for boards saved before previews existed. Loads each such
+// board once, computes its schematic, rewrites the index. Runs once from the
+// home screen; afterwards every save keeps the thumb fresh.
+export function backfillThumbs(): BoardMeta[] {
+  const list = listBoards();
+  let changed = false;
+  for (const meta of list) {
+    if (meta.thumb) continue;
+    const board = loadBoardById(meta.id);
+    if (board) {
+      meta.thumb = computeThumb(board);
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(INDEX_KEY, JSON.stringify(list));
+    } catch {
+      /* quota — non-fatal */
+    }
+  }
+  return list;
+}
+
 export function loadBoardById(id: string): Board | null {
   try {
     const raw = localStorage.getItem(boardDataKey(id));
@@ -46,25 +103,27 @@ export function loadBoardById(id: string): Board | null {
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
+// Throws if localStorage rejects the write (quota exceeded, private-mode, etc.).
+// Callers that must surface "your work isn't being saved" rely on this throwing
+// rather than silently dropping the data — see the autosave in store.ts.
 export function saveBoardById(id: string, board: Board): void {
-  try {
-    localStorage.setItem(boardDataKey(id), JSON.stringify(board));
-    // Keep the index in sync.
-    const list = listBoards();
-    const meta: BoardMeta = {
-      id,
-      name: board.name,
-      createdAt: board.createdAt,
-      updatedAt: board.updatedAt,
-      itemCount: board.items.length,
-    };
-    const idx = list.findIndex((m) => m.id === id);
-    if (idx >= 0) list[idx] = meta;
-    else list.push(meta);
-    // Sort newest-first.
-    list.sort((a, b) => b.updatedAt - a.updatedAt);
-    localStorage.setItem(INDEX_KEY, JSON.stringify(list));
-  } catch { /* quota exceeded etc. — non-fatal */ }
+  localStorage.setItem(boardDataKey(id), JSON.stringify(board));
+  // Keep the index in sync.
+  const list = listBoards();
+  const meta: BoardMeta = {
+    id,
+    name: board.name,
+    createdAt: board.createdAt,
+    updatedAt: board.updatedAt,
+    itemCount: board.items.length,
+    thumb: computeThumb(board),
+  };
+  const idx = list.findIndex((m) => m.id === id);
+  if (idx >= 0) list[idx] = meta;
+  else list.push(meta);
+  // Sort newest-first.
+  list.sort((a, b) => b.updatedAt - a.updatedAt);
+  localStorage.setItem(INDEX_KEY, JSON.stringify(list));
 }
 
 export function deleteBoardById(id: string): void {
@@ -80,7 +139,9 @@ export function deleteBoardById(id: string): void {
 export function createNewBoard(): { id: string; board: Board } {
   const id = nanoid(8);
   const board = emptyBoard();
-  saveBoardById(id, board);
+  // An empty board is tiny, but if storage is completely full even this can
+  // throw — don't let that block opening the editor; autosave will surface it.
+  try { saveBoardById(id, board); } catch { /* storage full — non-fatal here */ }
   return { id, board };
 }
 

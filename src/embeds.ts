@@ -4,6 +4,7 @@
 // expose a plain /embed URL that returns a self-contained iframe page.
 
 import type { EmbedItem, ItemDraft } from "./types";
+import { youtubeVideoDraft } from "./video";
 
 export type EmbedInfo = {
   provider: EmbedItem["provider"];
@@ -210,6 +211,10 @@ export const itemFromUrl = (
   url: string,
   center: { x: number; y: number },
 ): ItemDraft => {
+  // YouTube becomes a trimmable, looping video (not a plain embed) so any way
+  // of adding one — drag, paste, bulk import — lands you a clippable player.
+  const yt = youtubeVideoDraft(url, center);
+  if (yt) return yt;
   if (looksLikeImageUrl(url)) {
     return {
       type: "image",

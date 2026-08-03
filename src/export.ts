@@ -10,6 +10,35 @@
 // zoom, watch embeds. No editor, no toolbar, view-only.
 
 import type { Board, Theme } from "./types";
+// Vite resolves these to same-origin asset URLs; we fetch + base64-inline them
+// so the exported file carries the fonts and stays fully self-contained.
+import geistUrl from "./fonts/Geist-Variable.woff2?url";
+import geistMonoUrl from "./fonts/GeistMono-Variable.woff2?url";
+
+function bufToB64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// @font-face block with Geist (Sans + Mono) inlined as base64. Falls back to an
+// empty string if the fonts can't be read, so the export still opens (system
+// fonts) rather than failing.
+async function fontFaceCss(): Promise<string> {
+  try {
+    const [sans, mono] = await Promise.all([
+      fetch(geistUrl).then((r) => r.arrayBuffer()).then(bufToB64),
+      fetch(geistMonoUrl).then((r) => r.arrayBuffer()).then(bufToB64),
+    ]);
+    return (
+      `@font-face{font-family:'Geist';src:url(data:font/woff2;base64,${sans}) format('woff2');font-weight:100 900;font-style:normal;font-display:swap}` +
+      `@font-face{font-family:'Geist Mono';src:url(data:font/woff2;base64,${mono}) format('woff2');font-weight:100 900;font-style:normal;font-display:swap}`
+    );
+  } catch {
+    return "";
+  }
+}
 
 const escapeHtml = (s: string) =>
   s
@@ -24,9 +53,13 @@ const escapeHtml = (s: string) =>
 const safeJson = (v: unknown) =>
   JSON.stringify(v).replace(/<\/(script)/gi, "<\\/$1");
 
-export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
+export const exportToHtml = async (
+  board: Board,
+  theme: Theme = "light",
+): Promise<string> => {
   const title = escapeHtml(board.name || "crboard");
   const data = safeJson(board);
+  const fonts = await fontFaceCss();
 
   return `<!doctype html>
 <html lang="en" data-theme="${theme}">
@@ -35,6 +68,7 @@ export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>${title}</title>
 <style>
+  ${fonts}
   :root{--bg:#fafafa;--surface:#fff;--surface-2:#fff;--border:#e5e5e5;
     --text:#0a0a0a;--text-2:#525252;--text-3:#737373;--grid-dot:#d4d4d4;
     --chrome-bg:rgba(255,255,255,.85)}
@@ -42,7 +76,7 @@ export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
     --border:#262626;--text:#fafafa;--text-2:#d4d4d4;--text-3:#a3a3a3;
     --grid-dot:#262626;--chrome-bg:rgba(23,23,23,.85);color-scheme:dark}
   html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
-    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Inter,sans-serif;
+    font-family:'Geist',ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;
     -webkit-font-smoothing:antialiased;overflow:hidden}
   *{box-sizing:border-box}
   #viewport{position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab}
@@ -62,7 +96,7 @@ export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
   .item.text div{line-height:1.35}
   .item.text ul,.item.text ol{padding-left:1.4em;margin:0 0 .4em 0}
   .item.text li{line-height:1.4}
-  .item.text code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  .item.text code{font-family:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     background:var(--border);padding:.05em .3em;border-radius:2px;font-size:.9em}
   .item.text a{color:var(--text);text-decoration:underline}
   .item.text strong{font-weight:700}.item.text em{font-style:italic}.item.text s{text-decoration:line-through}
@@ -77,6 +111,15 @@ export const exportToHtml = (board: Board, theme: Theme = "light"): string => {
     text-decoration:none;flex-shrink:0}
   .item.embed .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item.embed .src-link b{color:var(--text);font-weight:500}
+  .item.video{display:flex;flex-direction:column;background:var(--bg);
+    border:1px solid var(--border);overflow:hidden}
+  .item.video .frame-wrap{flex:1;position:relative;min-height:0;background:#000}
+  .item.video iframe,.item.video video{width:100%;height:100%;border:0;display:block;background:#000;object-fit:contain}
+  .item.video .src-link{display:flex;align-items:center;gap:6px;padding:6px 10px;
+    border-top:1px solid var(--border);background:var(--surface-2);
+    font-size:11px;color:var(--text-2);text-decoration:none}
+  .item.video .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item.video .src-link b{color:var(--text);font-weight:500}
   .item.link{display:flex;flex-direction:column;justify-content:center;padding:16px;
     background:var(--surface-2);border:1px solid var(--border);
     text-decoration:none;color:var(--text);font-size:14px;word-break:break-word}
@@ -216,6 +259,10 @@ const VIEWER_JS = `
     if(it.type==='text'){
       el.style.fontSize=(it.fontSize||16)+'px';
       el.style.fontWeight=(it.fontWeight||400);
+      if(it.color) el.style.color=it.color;
+      if(it.align) el.style.textAlign=it.align;
+      if(it.bg==='transparent'){ el.style.background='transparent'; el.style.border='1px solid transparent'; }
+      else if(it.bg){ el.style.background=it.bg; }
       el.innerHTML=mdRender(it.text||'');
     } else if(it.type==='image'){
       var img=document.createElement('img'); img.src=it.src; img.alt=it.alt||''; img.draggable=false;
@@ -240,6 +287,35 @@ const VIEWER_JS = `
         '<path d="M14 5h5v5"/><path d="M19 5l-9 9"/><path d="M19 13v6H5V5h6"/></svg>';
       srcA.addEventListener('pointerdown',function(e){e.stopPropagation();});
       el.appendChild(srcA);
+    } else if(it.type==='video'){
+      var vwrap=document.createElement('div'); vwrap.className='frame-wrap';
+      var cs=+it.clipStart||0, ce=(it.clipEnd==null?null:+it.clipEnd), vloop=(it.loop!==false);
+      if(it.kind==='youtube'){
+        var yid=it.youtubeId||'';
+        var ysrc='https://www.youtube.com/embed/'+yid+'?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&loop=1&playlist='+yid+'&start='+Math.floor(cs)+(ce!=null?('&end='+Math.ceil(ce)):'');
+        var yf=document.createElement('iframe'); yf.src=ysrc;
+        yf.setAttribute('allow','autoplay; encrypted-media; picture-in-picture; fullscreen');
+        yf.setAttribute('allowfullscreen','');
+        vwrap.appendChild(yf);
+      } else {
+        var vid=document.createElement('video'); vid.src=it.src; vid.autoplay=true; vid.muted=true;
+        vid.setAttribute('playsinline',''); vid.controls=true;
+        // Native loop can't loop a sub-range, so enforce [clipStart, clipEnd].
+        vid.addEventListener('loadedmetadata',function(){ if(vid.currentTime<cs) vid.currentTime=cs; });
+        vid.addEventListener('timeupdate',function(){
+          var end=(ce!=null?ce:vid.duration);
+          if(isFinite(end)&&vid.currentTime>=end-0.03){ if(vloop){ vid.currentTime=cs; vid.play(); } else { vid.pause(); } }
+          else if(vid.currentTime<cs-0.25){ vid.currentTime=cs; }
+        });
+        vwrap.appendChild(vid);
+      }
+      el.appendChild(vwrap);
+      var vlabel=(it.kind==='youtube')?'YouTube':(it.fileName||'Video');
+      var vfoot=document.createElement(it.kind==='youtube'?'a':'div'); vfoot.className='src-link';
+      if(it.kind==='youtube'){ vfoot.href=it.src||('https://youtu.be/'+(it.youtubeId||'')); vfoot.target='_blank'; vfoot.rel='noreferrer';
+        vfoot.addEventListener('pointerdown',function(e){e.stopPropagation();}); }
+      vfoot.innerHTML='<span class="label"><b>'+escapeHtml(vlabel)+'</b></span>';
+      el.appendChild(vfoot);
     } else if(it.type==='link'){
       var a=document.createElement('a'); a.href=it.url; a.target='_blank'; a.rel='noreferrer';
       var host=''; try{host=new URL(it.url).hostname}catch(e){}
@@ -266,6 +342,40 @@ const VIEWER_JS = `
         svg.appendChild(p);
       });
       el.appendChild(svg);
+    } else if(it.type==='shape'){
+      var sns='http://www.w3.org/2000/svg';
+      var ssvg=document.createElementNS(sns,'svg');
+      ssvg.setAttribute('width','100%'); ssvg.setAttribute('height','100%');
+      ssvg.setAttribute('viewBox','0 0 '+it.w+' '+it.h);
+      ssvg.setAttribute('preserveAspectRatio','none');
+      ssvg.setAttribute('style','position:absolute;inset:0;display:block');
+      var sw=it.strokeWidth||0;
+      var sfill=(it.fill==='transparent')?'none':(it.fill||'none');
+      var sstroke=(it.stroke==='transparent')?'none':(it.stroke||'none');
+      var shp;
+      if(it.shape==='ellipse'){
+        shp=document.createElementNS(sns,'ellipse');
+        shp.setAttribute('cx',it.w/2); shp.setAttribute('cy',it.h/2);
+        shp.setAttribute('rx',Math.max(0,it.w/2-sw/2)); shp.setAttribute('ry',Math.max(0,it.h/2-sw/2));
+      } else {
+        shp=document.createElementNS(sns,'rect');
+        shp.setAttribute('x',sw/2); shp.setAttribute('y',sw/2);
+        shp.setAttribute('width',Math.max(0,it.w-sw)); shp.setAttribute('height',Math.max(0,it.h-sw));
+        if(it.shape==='note') shp.setAttribute('rx',6);
+      }
+      shp.setAttribute('fill',sfill); shp.setAttribute('stroke',sstroke);
+      shp.setAttribute('stroke-width',sw); shp.setAttribute('vector-effect','non-scaling-stroke');
+      ssvg.appendChild(shp);
+      el.appendChild(ssvg);
+      el.style.overflow='hidden';
+      if(it.shape==='note' && it.text){
+        var ntext=document.createElement('div');
+        ntext.textContent=it.text;
+        ntext.style.cssText='position:absolute;inset:0;padding:12px;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.3;white-space:pre-wrap;word-break:break-word;overflow:hidden';
+        ntext.style.fontSize=(it.fontSize||16)+'px';
+        ntext.style.color=it.textColor||'#0a0a0a';
+        el.appendChild(ntext);
+      }
     } else if(it.type==='connector'){
       // Connectors are rendered separately in an SVG layer above the world.
       return null;
@@ -287,7 +397,8 @@ const VIEWER_JS = `
   // vector-effect:non-scaling-stroke on the line, the visible arrow stays
   // roughly constant in screen pixels because the rendered stroke is fixed.
   var defs=document.createElementNS(ns2,'defs');
-  defs.innerHTML='<marker id="cr-arrow" markerUnits="strokeWidth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M 0 0 L 6 3 L 0 6 Z" fill="currentColor"/></marker>';
+  // auto-start-reverse lets one marker serve both ends (start flips outward).
+  defs.innerHTML='<marker id="cr-arrow" markerUnits="strokeWidth" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto-start-reverse"><path d="M 0 0 L 6 3 L 0 6 Z" fill="currentColor"/></marker>';
   connectorSvg.appendChild(defs);
   var byId={};
   (board.items||[]).forEach(function(it){ byId[it.id]=it; });
@@ -297,6 +408,20 @@ const VIEWER_JS = `
     var t=Math.max(0,Math.min(tx,ty));
     return {x:start.x+dir.x*t,y:start.y+dir.y*t};
   }
+  // Line routing — mirrors connectorPath in src/Canvas.tsx (shape is scale-free,
+  // so computing in world coords matches the on-screen curve).
+  function connectorPath(shape,x1,y1,x2,y2){
+    var dx=x2-x1, dy=y2-y1;
+    if(shape==='curved'){
+      if(Math.abs(dx)>=Math.abs(dy)) return 'M '+x1+' '+y1+' C '+(x1+dx*0.5)+' '+y1+' '+(x2-dx*0.5)+' '+y2+' '+x2+' '+y2;
+      return 'M '+x1+' '+y1+' C '+x1+' '+(y1+dy*0.5)+' '+x2+' '+(y2-dy*0.5)+' '+x2+' '+y2;
+    }
+    if(shape==='elbow'){
+      if(Math.abs(dx)>=Math.abs(dy)){ var mx=(x1+x2)/2; return 'M '+x1+' '+y1+' L '+mx+' '+y1+' L '+mx+' '+y2+' L '+x2+' '+y2; }
+      var my=(y1+y2)/2; return 'M '+x1+' '+y1+' L '+x1+' '+my+' L '+x2+' '+my+' L '+x2+' '+y2;
+    }
+    return 'M '+x1+' '+y1+' L '+x2+' '+y2;
+  }
   (board.items||[]).forEach(function(it){
     if(it.type!=='connector') return;
     var a=byId[it.from], b=byId[it.to];
@@ -304,15 +429,19 @@ const VIEWER_JS = `
     var fc={x:a.x+a.w/2,y:a.y+a.h/2}, tc={x:b.x+b.w/2,y:b.y+b.h/2};
     var e1=rayBoxExit(fc,{x:tc.x-fc.x,y:tc.y-fc.y},a);
     var e2=rayBoxExit(tc,{x:fc.x-tc.x,y:fc.y-tc.y},b);
-    var line=document.createElementNS(ns2,'line');
-    line.setAttribute('x1',e1.x); line.setAttribute('y1',e1.y);
-    line.setAttribute('x2',e2.x); line.setAttribute('y2',e2.y);
-    line.setAttribute('stroke','currentColor');
-    line.setAttribute('stroke-width','1.75');
-    line.setAttribute('vector-effect','non-scaling-stroke');
-    line.setAttribute('marker-end','url(#cr-arrow)');
-    line.setAttribute('style','color:var(--text-2)');
-    connectorSvg.appendChild(line);
+    var ends=it.ends||'one';
+    var p=document.createElementNS(ns2,'path');
+    p.setAttribute('d',connectorPath(it.shape||'straight',e1.x,e1.y,e2.x,e2.y));
+    p.setAttribute('fill','none');
+    p.setAttribute('stroke','currentColor');
+    p.setAttribute('stroke-width',(it.strokeWidth||1.75));
+    p.setAttribute('stroke-linejoin','round');
+    p.setAttribute('stroke-linecap','round');
+    p.setAttribute('vector-effect','non-scaling-stroke');
+    if(ends!=='none') p.setAttribute('marker-end','url(#cr-arrow)');
+    if(ends==='both') p.setAttribute('marker-start','url(#cr-arrow)');
+    p.setAttribute('style','color:'+(it.color||'var(--text-2)'));
+    connectorSvg.appendChild(p);
   });
   world.appendChild(connectorSvg);
 
@@ -356,8 +485,8 @@ const VIEWER_JS = `
 })();
 `;
 
-export const downloadHtml = (board: Board, theme: Theme = "light") => {
-  const html = exportToHtml(board, theme);
+export const downloadHtml = async (board: Board, theme: Theme = "light") => {
+  const html = await exportToHtml(board, theme);
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

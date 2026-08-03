@@ -70,11 +70,11 @@ export const exportToHtml = async (
 <style>
   ${fonts}
   :root{--bg:#fafafa;--surface:#fff;--surface-2:#fff;--border:#e5e5e5;
-    --text:#0a0a0a;--text-2:#525252;--text-3:#737373;--grid-dot:#d4d4d4;
-    --chrome-bg:rgba(255,255,255,.85)}
+    --text:#0a0a0a;--text-2:#525252;--text-3:#737373;--text-faint:#a3a3a3;
+    --grid-dot:#d4d4d4;--chrome-bg:rgba(255,255,255,.85)}
   [data-theme="dark"]{--bg:#0a0a0a;--surface:#171717;--surface-2:#1f1f1f;
     --border:#262626;--text:#fafafa;--text-2:#d4d4d4;--text-3:#a3a3a3;
-    --grid-dot:#262626;--chrome-bg:rgba(23,23,23,.85);color-scheme:dark}
+    --text-faint:#737373;--grid-dot:#262626;--chrome-bg:rgba(23,23,23,.85);color-scheme:dark}
   html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
     font-family:'Geist',ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;
     -webkit-font-smoothing:antialiased;overflow:hidden}
@@ -120,6 +120,20 @@ export const exportToHtml = async (
     font-size:11px;color:var(--text-2);text-decoration:none}
   .item.video .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item.video .src-link b{color:var(--text);font-weight:500}
+  .item.audio{display:flex;flex-direction:column;background:var(--surface-2);
+    border:1px solid var(--border);overflow:hidden}
+  .item.audio .player{flex:1;min-height:0;display:flex;align-items:center;gap:12px;padding:12px}
+  .item.audio button.play{width:36px;height:36px;flex-shrink:0;border-radius:50%;
+    border:1px solid var(--border);background:var(--surface);color:var(--text);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+    font-size:12px;line-height:1;font-family:inherit}
+  .item.audio svg.wave{flex:1;min-width:0;height:100%;display:block;cursor:pointer}
+  .item.audio .src-link{display:flex;align-items:center;gap:6px;padding:6px 10px;
+    border-top:1px solid var(--border);background:var(--surface);
+    font-size:11px;color:var(--text-2)}
+  .item.audio .src-link span.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item.audio .src-link b{color:var(--text);font-weight:500}
+  .item.audio .src-link span.time{font-variant-numeric:tabular-nums;color:var(--text-3)}
   .item.link{display:flex;flex-direction:column;justify-content:center;padding:16px;
     background:var(--surface-2);border:1px solid var(--border);
     text-decoration:none;color:var(--text);font-size:14px;word-break:break-word}
@@ -250,6 +264,15 @@ const VIEWER_JS = `
     return input;
   }
 
+  var audioClipSeq=0;
+
+  function fmtClock(sec){
+    if(!isFinite(sec)||sec<0) sec=0;
+    var s=Math.floor(sec%60), m=Math.floor((sec/60)%60), h=Math.floor(sec/3600);
+    var ss=(s<10?'0':'')+s;
+    return h>0?(h+':'+(m<10?'0':'')+m+':'+ss):(m+':'+ss);
+  }
+
   function renderItem(it){
     var el=document.createElement('div');
     el.className='item '+it.type;
@@ -316,6 +339,85 @@ const VIEWER_JS = `
         vfoot.addEventListener('pointerdown',function(e){e.stopPropagation();}); }
       vfoot.innerHTML='<span class="label"><b>'+escapeHtml(vlabel)+'</b></span>';
       el.appendChild(vfoot);
+    } else if(it.type==='audio'){
+      // Waveform player, mirroring the editor: bars from the precomputed
+      // peaks, ink-colored progress under a clipPath, click/drag to seek.
+      var AFOOT=28, apad=12;
+      var wfW=Math.max(40,it.w-apad*2-36-12), wfH=Math.max(20,it.h-AFOOT-apad*2);
+      var player=document.createElement('div'); player.className='player';
+      var au=document.createElement('audio'); au.src=it.src; au.preload='metadata';
+      var abtn=document.createElement('button'); abtn.className='play';
+      abtn.textContent='\\u25B6'; abtn.title='Play';
+      var ans='http://www.w3.org/2000/svg';
+      var asvg=document.createElementNS(ans,'svg');
+      asvg.setAttribute('class','wave');
+      asvg.setAttribute('viewBox','0 0 '+wfW+' '+wfH);
+      asvg.setAttribute('preserveAspectRatio','none');
+      var peaks=(it.peaks&&it.peaks.length)?it.peaks:null;
+      var abn=Math.max(12,Math.min(96,Math.floor(wfW/5)));
+      var abars=[];
+      for(var bi=0;bi<abn;bi++){
+        var av;
+        if(peaks){
+          var s0=Math.floor(bi*peaks.length/abn), s1=Math.max(s0+1,Math.floor((bi+1)*peaks.length/abn));
+          av=0; for(var bj=s0;bj<s1;bj++) if(peaks[bj]>av) av=peaks[bj];
+        } else { av=0.35+0.3*Math.abs(Math.sin(bi*0.55)); }
+        abars.push(Math.max(2,av*wfH*0.92));
+      }
+      var cid='awc'+(audioClipSeq++);
+      function barGroup(fill){
+        var g=document.createElementNS(ans,'g'); g.setAttribute('fill',fill);
+        for(var i=0;i<abn;i++){
+          var r=document.createElementNS(ans,'rect');
+          r.setAttribute('x',i*5); r.setAttribute('y',(wfH-abars[i])/2);
+          r.setAttribute('width',3); r.setAttribute('height',abars[i]); r.setAttribute('rx',1.5);
+          g.appendChild(r);
+        }
+        return g;
+      }
+      var adefs=document.createElementNS(ans,'defs');
+      var aclip=document.createElementNS(ans,'clipPath'); aclip.setAttribute('id',cid);
+      var acr=document.createElementNS(ans,'rect');
+      acr.setAttribute('x',0); acr.setAttribute('y',0); acr.setAttribute('width',0); acr.setAttribute('height',wfH);
+      aclip.appendChild(acr); adefs.appendChild(aclip); asvg.appendChild(adefs);
+      asvg.appendChild(barGroup('var(--text-faint)'));
+      var aprog=barGroup('var(--text)'); aprog.setAttribute('clip-path','url(#'+cid+')');
+      asvg.appendChild(aprog);
+      var atime=null;
+      function apaint(){
+        var d=isFinite(au.duration)?au.duration:(it.duration||0);
+        var frac=d>0?Math.min(1,au.currentTime/d):0;
+        acr.setAttribute('width',frac*wfW);
+        if(atime) atime.textContent=fmtClock(au.currentTime)+' / '+fmtClock(d);
+      }
+      var araf=null;
+      function atick(){ apaint(); araf=requestAnimationFrame(atick); }
+      au.addEventListener('play',function(){ abtn.textContent='\\u275A\\u275A'; abtn.title='Pause'; if(araf==null) araf=requestAnimationFrame(atick); });
+      function astop(){ abtn.textContent='\\u25B6'; abtn.title='Play'; if(araf!=null){ cancelAnimationFrame(araf); araf=null; } apaint(); }
+      au.addEventListener('pause',astop); au.addEventListener('ended',astop);
+      au.addEventListener('loadedmetadata',apaint);
+      abtn.addEventListener('pointerdown',function(e){e.stopPropagation();});
+      abtn.addEventListener('click',function(e){ e.stopPropagation(); if(au.paused) au.play(); else au.pause(); });
+      asvg.addEventListener('pointerdown',function(e){
+        e.stopPropagation();
+        var seek=function(cx){
+          var r=asvg.getBoundingClientRect();
+          var d=isFinite(au.duration)?au.duration:(it.duration||0);
+          if(r.width<=0||d<=0) return;
+          au.currentTime=Math.min(1,Math.max(0,(cx-r.left)/r.width))*d;
+          apaint();
+        };
+        seek(e.clientX);
+        var mv=function(ev){ seek(ev.clientX); };
+        var up=function(){ window.removeEventListener('pointermove',mv); window.removeEventListener('pointerup',up); };
+        window.addEventListener('pointermove',mv); window.addEventListener('pointerup',up);
+      });
+      player.appendChild(abtn); player.appendChild(asvg);
+      el.appendChild(au); el.appendChild(player);
+      var afoot=document.createElement('div'); afoot.className='src-link';
+      afoot.innerHTML='<span class="label"><b>'+escapeHtml(it.fileName||'Audio')+'</b></span><span class="time">0:00 / '+fmtClock(it.duration||0)+'</span>';
+      atime=afoot.querySelector('.time');
+      el.appendChild(afoot);
     } else if(it.type==='link'){
       var a=document.createElement('a'); a.href=it.url; a.target='_blank'; a.rel='noreferrer';
       var host=''; try{host=new URL(it.url).hostname}catch(e){}

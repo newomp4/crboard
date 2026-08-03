@@ -24,6 +24,12 @@ import {
   videoFileMeta,
 } from "./video";
 import {
+  AUDIO_EXT,
+  audioFileMeta,
+  fileAudioDraft,
+  MAX_INLINE_AUDIO_BYTES,
+} from "./audio";
+import {
   backupFilename,
   isBackupSupported,
   loadSavedBackupDir,
@@ -464,6 +470,24 @@ const App = ({
             i++;
             continue;
           }
+          if (f.type.startsWith("audio/") || AUDIO_EXT.test(f.name)) {
+            // Audio clip → waveform player item. Same inline-data-URL storage
+            // (and size warning) as local video.
+            if (f.size > MAX_INLINE_AUDIO_BYTES) {
+              const mb = (f.size / 1024 / 1024).toFixed(1);
+              if (
+                !confirm(
+                  `"${f.name}" is ${mb} MB. Large audio files may not survive a reload (browser storage is limited). Drop it in anyway?`,
+                )
+              )
+                continue;
+            }
+            const src = await fileToDataUrl(f);
+            const meta = await audioFileMeta(src);
+            items.push(fileAudioDraft(src, f.name, at, meta));
+            i++;
+            continue;
+          }
           if (!f.type.startsWith("image/")) continue;
           const src = await fileToDataUrl(f);
           const dims = await imgSize(src);
@@ -535,7 +559,7 @@ const App = ({
       {state.board.items.length === 0 && <EmptyHint />}
       {dragging && (
         <div className="drop-overlay">
-          <span>Drop image or video to add to board</span>
+          <span>Drop image, video, or audio to add to board</span>
         </div>
       )}
       {bulkOpen && (
@@ -713,6 +737,8 @@ const itemMatches = (item: Item, q: string): boolean => {
   if (item.type === "embed") return item.url.toLowerCase().includes(q);
   if (item.type === "image")
     return (item.alt ?? "").toLowerCase().includes(q);
+  if (item.type === "audio")
+    return (item.fileName ?? "").toLowerCase().includes(q);
   return false;
 };
 
@@ -865,7 +891,7 @@ const EmptyHint = () => (
     }}
   >
     <div style={{ fontWeight: 600, color: "var(--text-3)" }}>Empty board</div>
-    <div>Drag in images, videos, or links — or paste a URL</div>
+    <div>Drag in images, videos, audio, or links — or paste a URL</div>
     <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
       …or pick a tool below to write and draw
     </div>

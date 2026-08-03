@@ -16,6 +16,7 @@
 // thumbnail source and show a labelled placeholder card instead.
 
 import type { Board, EmbedItem, Item, Theme } from "./types";
+import { resamplePeaks } from "./audio";
 import geistUrl from "./fonts/Geist-Variable.woff2?url";
 
 // Load Geist once so canvas text renders in it (the 2D context can only use
@@ -477,6 +478,74 @@ function renderVideoItem(
   ctx.fillText(label, x + pad, y + mediaH + footerH / 2 + fz * 0.35, w - pad * 2);
 }
 
+// Audio renders faithfully in a PNG — the waveform is data we already have
+// (item.peaks), so draw the real player: play badge, bars, footer with name.
+function renderAudioItem(
+  ctx: CanvasRenderingContext2D,
+  it: Extract<Item, { type: "audio" }>,
+  wx: (x: number) => number,
+  wy: (y: number) => number,
+  scale: number,
+  colors: Colors,
+) {
+  const x = wx(it.x), y = wy(it.y);
+  const w = it.w * scale, h = it.h * scale;
+  const footerH = Math.min(28 * scale, h * 0.25);
+  const bodyH = h - footerH;
+
+  ctx.fillStyle = colors.surface;
+  ctx.fillRect(x, y, w, h);
+
+  // Play badge on the left of the player row.
+  const pad = 12 * scale;
+  const btnR = Math.min(18 * scale, bodyH * 0.32);
+  const bcx = x + pad + btnR, bcy = y + bodyH / 2;
+  ctx.strokeStyle = colors.border;
+  ctx.lineWidth = Math.max(0.5, scale * 0.5);
+  ctx.beginPath(); ctx.arc(bcx, bcy, btnR, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = colors.text;
+  const t = btnR * 0.45;
+  ctx.beginPath();
+  ctx.moveTo(bcx - t * 0.55, bcy - t);
+  ctx.lineTo(bcx - t * 0.55, bcy + t);
+  ctx.lineTo(bcx + t, bcy);
+  ctx.closePath(); ctx.fill();
+
+  // Waveform bars between the badge and the right edge.
+  const wfX = bcx + btnR + 12 * scale;
+  const wfW = Math.max(10, x + w - pad - wfX);
+  const wfH = Math.max(8, bodyH - pad * 2);
+  const step = 5 * scale, barW = 3 * scale;
+  const n = Math.max(8, Math.floor(wfW / step));
+  const bars = resamplePeaks(it.peaks, n);
+  ctx.fillStyle = colors.text2;
+  for (let i = 0; i < n; i++) {
+    const bh = Math.max(2 * scale, bars[i] * wfH * 0.92);
+    const bx = wfX + i * step;
+    const by = y + bodyH / 2 - bh / 2;
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(bx, by, barW, bh, barW / 2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(bx, by, barW, bh);
+    }
+  }
+
+  // Footer strip with the file name, matching the video footer.
+  ctx.fillStyle = colors.surface;
+  ctx.fillRect(x, y + bodyH, w, footerH);
+  ctx.strokeStyle = colors.border;
+  ctx.strokeRect(x, y, w, h);
+  ctx.beginPath();
+  ctx.moveTo(x, y + bodyH); ctx.lineTo(x + w, y + bodyH); ctx.stroke();
+
+  const fz = Math.min(11 * scale, footerH * 0.5);
+  ctx.font = `500 ${fz}px ${FONT}`;
+  ctx.fillStyle = colors.text;
+  ctx.fillText(it.fileName || "Audio", x + 10 * scale, y + bodyH + footerH / 2 + fz * 0.35, w - 20 * scale);
+}
+
 // Draw image covering the destination rect (object-fit: cover).
 function drawImageCover(
   ctx: CanvasRenderingContext2D,
@@ -784,6 +853,8 @@ export async function downloadImage(board: Board, theme: Theme = "light") {
         ctx, it, wx, wy, scale, colors,
         videoThumbnails.get(it.id) ?? null,
       );
+    } else if (it.type === "audio") {
+      renderAudioItem(ctx, it, wx, wy, scale, colors);
     }
   }
 

@@ -90,6 +90,20 @@ export type VideoItem = Base & {
   duration?: number;
 };
 
+// An audio clip rendered as a waveform with an inline player. Always a local
+// file stored as a data URL (like images/local videos), so it persists and
+// travels in exports. peaks is the precomputed waveform — one 0..1 amplitude
+// per time bucket, decoded once at import (see audio.ts) so no renderer ever
+// has to touch the raw audio again. Optional because a decode can fail; the
+// player falls back to a placeholder pattern.
+export type AudioItem = Base & {
+  type: "audio";
+  src: string; // data URL
+  fileName?: string;
+  duration?: number;
+  peaks?: number[];
+};
+
 // A drawn primitive: a rectangle, an ellipse, or a sticky note (a filled rect
 // that also holds centered, editable text). All three share fill/stroke; notes
 // add text fields. Unlike text items, a note's box is a fixed size — its text
@@ -147,6 +161,7 @@ export type Item =
   | EmbedItem
   | LinkItem
   | VideoItem
+  | AudioItem
   | DrawingItem
   | ShapeItem
   | ConnectorItem;

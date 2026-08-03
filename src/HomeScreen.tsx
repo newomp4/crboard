@@ -7,6 +7,7 @@ import {
   type BoardMeta,
 } from "./boards";
 import type { Board, Item } from "./types";
+import { resamplePeaks } from "./audio";
 
 type Props = {
   onOpen: (id: string, board: Board) => void;
@@ -464,6 +465,7 @@ const MiniItem = ({ it, byId }: { it: Item; byId: Map<string, Item> }) => {
         </svg>
       );
     case "video":
+    case "audio":
     case "embed":
     case "link":
       return <MiniCard it={it} />;
@@ -475,16 +477,18 @@ const MiniItem = ({ it, byId }: { it: Item; byId: Map<string, Item> }) => {
 const MiniCard = ({
   it,
 }: {
-  it: Extract<Item, { type: "video" | "embed" | "link" }>;
+  it: Extract<Item, { type: "video" | "audio" | "embed" | "link" }>;
 }) => {
   const label =
     it.type === "video"
       ? it.kind === "youtube"
         ? "YouTube"
         : it.fileName || "Video"
-      : it.type === "link"
-        ? it.title || hostOf(it.url)
-        : capitalize(it.provider || hostOf(it.url));
+      : it.type === "audio"
+        ? it.fileName || "Audio"
+        : it.type === "link"
+          ? it.title || hostOf(it.url)
+          : capitalize(it.provider || hostOf(it.url));
   const playable = it.type === "video" || it.type === "embed";
   return (
     <foreignObject x={it.x} y={it.y} width={it.w} height={it.h}>
@@ -523,6 +527,7 @@ const MiniCard = ({
             ▶
           </div>
         )}
+        {it.type === "audio" && <MiniWaveform peaks={it.peaks} />}
         <div
           style={{
             fontSize: 15,
@@ -539,6 +544,30 @@ const MiniCard = ({
         </div>
       </div>
     </foreignObject>
+  );
+};
+
+// Tiny static waveform for audio items in board previews — drawn from the
+// item's stored peaks, so it looks like the actual clip.
+const MiniWaveform = ({ peaks }: { peaks?: number[] }) => {
+  const n = 28;
+  const bars = resamplePeaks(peaks, n);
+  const H = 26;
+  return (
+    <svg
+      viewBox={`0 0 ${n * 4} ${H}`}
+      style={{ width: "70%", maxWidth: 140, height: H, display: "block" }}
+      aria-hidden
+    >
+      <g fill="var(--text-2)">
+        {bars.map((p, i) => {
+          const h = Math.max(2, p * H * 0.9);
+          return (
+            <rect key={i} x={i * 4} y={(H - h) / 2} width={2.5} height={h} rx={1.25} />
+          );
+        })}
+      </g>
+    </svg>
   );
 };
 

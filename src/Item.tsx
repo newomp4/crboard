@@ -9,6 +9,7 @@ import type { Item, View } from "./types";
 import type { Action } from "./store";
 import { detectEmbed } from "./embeds";
 import { VideoBody } from "./VideoBody";
+import { AudioBody } from "./AudioBody";
 import { computeSnap, type Guide } from "./snap";
 import { renderMarkdown } from "./markdown";
 
@@ -570,6 +571,8 @@ const ItemBody = ({
       return <EmbedBody item={item} interactive={interactive} />;
     case "video":
       return <VideoBody item={item} interactive={interactive} dispatch={dispatch} />;
+    case "audio":
+      return <AudioBody item={item} dispatch={dispatch} />;
     case "link":
       return <LinkBody item={item} selected={selected} />;
     case "drawing":
